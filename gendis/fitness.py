@@ -64,10 +64,14 @@ def logloss_fitness_location(X, y, shapelets, cache=None, verbose=False):
     return (cv_score, sum([len(x) for x in shapelets]))
 
 class DistributionDistance:
-    def __init__(self, distance_function):
+    def __init__(self, distance_function, shapelet_dist_threshold):
+        self.shapelet_dist_threshold = shapelet_dist_threshold
         self.distance_function = distance_function
+        
+    def __call__(self, X, y, shapelets, cache, verbose=False):
+        return self.distance(X, y, shapelets, cache, verbose)
 
-    def _calculate_shapelet_dist_matrix(X, y, shapelets, cache=None, verbose=False):
+    def _calculate_shapelet_dist_matrix(self, X, y, shapelets, cache=None, verbose=False):
         D = np.zeros((len(X), len(shapelets)))
         L = np.zeros((len(X), len(shapelets)))
 
@@ -88,12 +92,15 @@ class DistributionDistance:
 
         return D
 
-    def distance(X, y, shapelets, dist_threshold, cache=None, verbose=False):
+    def distance(self, X, y, shapelets, cache, verbose=False):
         D = self._calculate_shapelet_dist_matrix(X, y, shapelets, cache, verbose)
-        subgroup_filter = np.all(D > dist_threshold, axis=1)
+        subgroup_filter = np.all(D > self.shapelet_dist_threshold, axis=1)
         subgroup_y = y[subgroup_filter]
         rest_y = y[~subgroup_filter]
-        dist = self.distance_function(subgroup_y, rest_y)
+        if (len(subgroup_y) == 0) or (len(rest_y) == 0):
+            dist = 0
+        else: 
+            dist = self.distance_function(subgroup_y, rest_y)
         return (dist, sum([len(x) for x in shapelets]))
  
     @staticmethod
@@ -103,3 +110,7 @@ class DistributionDistance:
     @staticmethod
     def mannwhitneyu(y1, y2):
         return mannwhitneyu(y1, y2)
+
+    @staticmethod
+    def simple_mean(y1, y2):
+        return np.absolute(np.mean(y1) - np.mean(y2))

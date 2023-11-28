@@ -27,7 +27,7 @@ from sklearn.utils.validation import check_is_fitted
 try:
     from fitness import logloss_fitness
 except:
-    from gendis.fitness import logloss_fitness
+    from gendis.fitness import logloss_fitness, DistributionDistance
 
 # Pairwise distances
 try:
@@ -140,13 +140,25 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
     >>> lr.score(distances, y)
     1.0
     """
-    def __init__(self, population_size=50, iterations=25, verbose=False, 
-                 normed=False, mutation_prob=0.1, wait=10, plot=None, 
-                 max_shaps=None, crossover_prob=0.4, n_jobs=1, max_len=None, 
-                 fitness=None, init_ops=[random_shapelet, kmeans], 
-                 cx_ops=[merge_crossover, point_crossover, 
-                         shap_point_crossover], 
-                 mut_ops=[add_shapelet, remove_shapelet, mask_shapelet]):
+    def __init__(
+        self, 
+        population_size=50, 
+        iterations=25, 
+        verbose=False, 
+        normed=False, 
+        mutation_prob=0.1, 
+        wait=10, 
+        plot=None, 
+        max_shaps=None, 
+        crossover_prob=0.4, 
+        n_jobs=1, 
+        max_len=None, 
+        _min_length = 0,
+        fitness=None, 
+        init_ops=[random_shapelet, kmeans], 
+        cx_ops=[merge_crossover, point_crossover, shap_point_crossover], 
+        mut_ops=[add_shapelet, remove_shapelet, mask_shapelet]
+    ):
         # Hyper-parameters
         self.population_size = population_size
         self.iterations = iterations
@@ -157,6 +169,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.wait = wait
         self.n_jobs = n_jobs
         self.normed = normed
+        self._min_length = 0
         self.max_len = max_len
         self.max_shaps = max_shaps
         self.init_ops = init_ops
@@ -164,7 +177,11 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.mut_ops = mut_ops
 
         if fitness is None:
-            self.fitness = logloss_fitness
+            # self.fitness = logloss_fitness
+            self.fitness = DistributionDistance(
+                distance_function=DistributionDistance.simple_mean, 
+                shapelet_dist_threshold=1.0
+            )
         else:
             # Do some initial checks
             assert callable(fitness)
@@ -174,7 +191,6 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         # Attributes
         self.label_mapping = {}
         self.shapelets = []
-        self._min_length = 0
 
     def _convert_X(self, X):
         if isinstance(X, list):
@@ -412,7 +428,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             best_shapelets.append(shap.flatten())
         self.shapelets = best_shapelets
 
-    def transform(self, X):
+    def transform(self, X, include_loc=False):
         """After fitting the Extractor, we can transform collections of 
         timeseries in matrices with distances to each of the shapelets in
         the evolved shapelet set.
@@ -427,16 +443,20 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         -------
         D : array-like, shape = [n_ts, n_shaps]
             The matrix with distances
+        L : array-like, shape = [n_ts, n_shaps]
+            The matrix with localization of shapelets
         """
+        
         X = self._convert_X(X)
-
-        # Check is fit had been called
         check_is_fitted(self, ['shapelets'])
 
-        # Construct (|X| x |S|) distance matrix
         D = np.zeros((len(X), len(self.shapelets)))
-        _pdist(X, [shap.flatten() for shap in self.shapelets], D)
+        if include_loc:
+            L = np.zeros((len(X), len(shapelets)))
+            _pdist_location(X, [shap.flatten() for shap in self.shapelets], D, L)
+            return D, L
 
+        _pdist(X, [shap.flatten() for shap in self.shapelets], D)
         return D
 
     def fit_transform(self, X, y):
