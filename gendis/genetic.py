@@ -216,7 +216,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         return y
 
-    def fit(self, X, y):
+    def fit(self, X, y, convert_categorical_labels=False):
         """Extract shapelets from the provided timeseries and labels.
 
         Parameters
@@ -229,7 +229,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             The target values.
         """
         X = self._convert_X(X)
-        y = self._convert_y(y)
+        if (convert_categorical_labels): y = self._convert_y(y)
         self._min_length = min([len(x) for x in X])
         
         if self._min_length <= 4:
@@ -245,7 +245,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             self.max_shaps = int(np.sqrt(self._min_length)) + 1
 
         # Sci-kit learn check for label vector.
-        check_array(y)
+        # check_array(y)
 
         # We will try to maximize the negative logloss of LR in CV.
         # In the case of ties, we pick the one with least number of shapelets

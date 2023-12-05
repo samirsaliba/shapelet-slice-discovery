@@ -97,7 +97,7 @@ class DistributionDistance:
         subgroup_filter = np.all(D > self.shapelet_dist_threshold, axis=1)
         subgroup_y = y[subgroup_filter]
         rest_y = y[~subgroup_filter]
-        if (len(subgroup_y) == 0) or (len(rest_y) == 0):
+        if (len(subgroup_y) < 10) or (len(rest_y) < 10):
             dist = 0
         else: 
             dist = self.distance_function(subgroup_y, rest_y)
@@ -105,12 +105,12 @@ class DistributionDistance:
  
     @staticmethod
     def wasserstein_distance(y1, y2):
-        return wasserstein_distance(y1, y2)
+        return wasserstein_distance(y1.reshape(-1), y2.reshape(-1))
 
     @staticmethod
     def mannwhitneyu(y1, y2):
-        return mannwhitneyu(y1, y2)
+        return mannwhitneyu(y1.reshape(-1), y2.reshape(-1))
 
     @staticmethod
     def simple_mean(y1, y2):
-        return np.absolute(np.mean(y1) - np.mean(y2))
+        return np.absolute(np.mean(y1.reshape(-1)) - np.mean(y2.reshape(-1)))
