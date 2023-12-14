@@ -108,8 +108,9 @@ class SubgroupDistance:
         return self.distance(X, y, shapelets, cache, verbose)
 
     @staticmethod
-    def number_of_individuals_factor(y):
-        return 1 / (np.sqrt(len(y)) ** 2)
+    def number_of_individuals_factor(n):
+        # return 0.5 / np.sqrt(n)
+        return 1/n
 
     @staticmethod
     def filter_subgroup_shapelets(y, D, shapelet_dist_threshold, return_filter=False):
@@ -145,11 +146,11 @@ class SubgroupDistance:
         subgroup_y, rest_y = self.filter_subgroup_shapelets(
             y, D, self.shapelet_dist_threshold)
         subgroup_error_mean = np.mean(subgroup_y)
-        if (len(subgroup_y) < 10) or (len(rest_y) < 10):
+        if (len(subgroup_y) < 8) or (len(rest_y) < 8):
             res, dist = 0, None
         else:
             dist = self.distance_function(subgroup_y, rest_y)
-            res = dist - self.number_of_individuals_factor(rest_y)
+            res = dist - self.number_of_individuals_factor(len(subgroup_y))
 
         return {
             'value': (res, len(shapelets), subgroup_error_mean),
