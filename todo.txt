@@ -1,0 +1,10 @@
+- corrigir as funcoes para usar p-value (1-pvalue)
+- adicionar erro medio do grupo nos reports das geracoes
+- funcao logistica para penalizar numero de shapelets
+- funcao logistica para penalizar poucos individuos = 1/(raiz quadrada de n) pysubgroup
+- funcao de pós-processamento para já filtrar individuos pertencentes
+- funcao de pós-processamento para visualizacao de cada individuo com a shapelet localizada
+
+
+https://pysubgroup.readthedocs.io/en/latest/sections/components/targets.html
+alpha entre [0-1]
