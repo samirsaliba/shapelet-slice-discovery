@@ -5,6 +5,7 @@ import time
 
 # "Standard" data science libs
 import numpy as np
+from math import ceil, floor
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -167,7 +168,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         fitness=None,
         init_ops=[random_shapelet, kmeans],
         cx_ops=[merge_crossover, point_crossover, shap_point_crossover],
-        mut_ops=[add_shapelet, remove_shapelet, mask_shapelet]
+        mut_ops=[add_shapelet, remove_shapelet, mask_shapelet],
+        dist_threshold=1.0,
     ):
         # Hyper-parameters
         self.population_size = population_size
@@ -186,12 +188,13 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.cx_ops = cx_ops
         self.mut_ops = mut_ops
         self.is_fitted = False
+        self.dist_threshold = dist_threshold
 
         if fitness is None:
             # self.fitness = logloss_fitness
             self.fitness = SubgroupDistance(
                 distance_function=SubgroupDistance.simple_mean,
-                shapelet_dist_threshold=1.0
+                shapelet_dist_threshold=dist_threshold
             )
         else:
             # Do some initial checks
@@ -493,6 +496,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         L : array-like, shape = [n_ts, n_shaps]
             The matrix with localization of shapelets
         """
+        assert self.is_fitted, "Fit the gendis model first calling fit()"
+
         if shapelets is None:
             shapelets = self.best['shapelets']
 
@@ -539,7 +544,84 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         """Write away all hyper-parameters and discovered shapelets to disk"""
         pickle.dump(self, open(path, 'wb+'))
 
+    def get_subgroups(self, X, y, shapelets=None):
+        """
+        Get the subgroups based on the provided shapelets (if not provided, the best found by gendis).
+
+        Parameters:
+        - X (array-like): Input time series data.
+        - y (array-like): Target labels for the time series data.
+        - shapelets (array-like, optional): Shapelets used for transformation. If not provided,
+        the function assumes that shapelets have already been calculated.
+
+        Returns:
+        - sg_indexes (array): Indexes of instances belonging to subgroups.
+        - not_sg_indexes (array): Indexes of instances not belonging to subgroups.
+        """
+        assert self.is_fitted, "Fit the gendis model first calling fit()"
+
+        D, L = self.transform(X=X, shapelets=shapelets)
+        sg_filter = SubgroupDistance.filter_subgroup_shapelets(
+            y, D, shapelet_dist_threshold=self.dist_threshold, return_filter=True
+        )
+        [sg_indexes] = np.where(sg_filter)
+        [not_sg_indexes] = np.where(~sg_filter)
+
+        return sg_indexes, not_sg_indexes
+
     @staticmethod
     def load(path):
         """Instantiate a saved GeneticExtractor"""
         return pickle.load(open(path, 'rb'))
+
+    def plot_series_and_shapelets(
+        self,
+        X,
+        y,
+        shapelets,
+        indexes_to_plot,
+        row_n = 5,
+        col_m = 2,
+        adjust_w = 1,
+        adjust_h = 0.5,
+        series_offset = 0,
+    ):
+        default_w, default_h = (4.8, 6.4)
+        figsize = (col_m*default_w*adjust_w, row_n*default_h*adjust_h)
+
+        fig, axs = plt.subplots(row_n, col_m, figsize=figsize)
+        fig.tight_layout(pad=3.0)
+
+        D, L = self.transform(X=X, shapelets=shapelets)
+
+        for i, series_idx in enumerate(indexes_to_plot[series_offset:row_n*col_m]):
+            row, col = i//col_m, i%col_m
+            ax = axs[row][col]
+
+            series = X.iloc[series_idx].values
+            model_error = y.iloc[series_idx]
+            ax.plot(series, alpha=0.3)
+            ax.title.set_text(f'Series index {series_idx}, model error of {model_error:.2f}')
+            
+            for shap_idx, shap in enumerate(shapelets): 
+                dist = D[series_idx][shap_idx]
+                loc = L[series_idx][shap_idx]
+
+                k = loc * float(len(series) - len(shap)) 
+                start = floor(k)
+                end = ceil(start + len(shap))
+                shap_idx = list(range(start, end))
+
+                # Dotted line if dist is above threshold
+                fmt = '--' if dist > self.dist_threshold else '-'
+                ax.plot(shap_idx, shap, fmt)
+
+
+        i+=1
+        # Remove unused axes
+        while i < (row_n*col_m):
+            row, col = i//col_m, i%col_m
+            axs[row][col].remove()
+            i+=1
+        
+        return plt
