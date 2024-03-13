@@ -164,7 +164,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         crossover_prob=0.4,
         n_jobs=1,
         max_len=None,
-        _min_length=0,
+        min_len=0,
         fitness=None,
         init_ops=[random_shapelet, kmeans],
         cx_ops=[merge_crossover, point_crossover, shap_point_crossover],
@@ -181,7 +181,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.wait = wait
         self.n_jobs = n_jobs
         self.normed = normed
-        self._min_length = 0
+        self.min_len = min_len
         self.max_len = max_len
         self.max_shaps = max_shaps
         self.init_ops = init_ops
@@ -293,9 +293,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         X = self._convert_X(X)
         if (convert_categorical_labels):
             y = self._convert_y(y)
-        self._min_length = min([len(x) for x in X])
+        self._min_length_series = min([len(x) for x in X])
 
-        if self._min_length <= 4:
+        if self._min_length_series <= 4:
             raise Exception('Time series should be of at least length 4!')
 
         if self.max_len is None:
@@ -305,7 +305,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                 self.max_len = len(X[0])
 
         if self.max_shaps is None:
-            self.max_shaps = int(np.sqrt(self._min_length)) + 1
+            self.max_shaps = int(np.sqrt(self._min_length_series)) + 1
 
         # Sci-kit learn check for label vector.
         # check_array(y)
@@ -351,7 +351,13 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                 n_shapelets = np.random.randint(2, self.max_shaps)
 
             init_op = np.random.choice(self.init_ops)
-            return init_op(X, n_shapelets, self._min_length, self.max_len)
+            return init_op(
+                X=X, 
+                n_shapelets=n_shapelets, 
+                min_len_series=self._min_length_series, 
+                max_len=self.max_len, 
+                min_len=self.min_len
+            )
 
         toolbox.register("create", create_individual)
         toolbox.register("individual",  tools.initIterate,
