@@ -7,9 +7,14 @@ try:
 except:
     from pairwise_dist import _pdist, _pdist_location
 
-def logloss_fitness(X, y, shapelets, cache=None, verbose=False):
+try:
+    from shapelets_distances import dtw
+except:
+    from gendis.shapelets_distances import dtw
+
+def logloss_fitness(X, y, shapelets, dist_function, dist_func_returns, cache=None, verbose=False):
     """Calculate the fitness of an individual/shapelet set"""
-    D = np.zeros((len(X), len(shapelets)))
+    D = -1 * np.ones((len(X), len(shapelets)))
 
     # First check if we already calculated distances for a shapelet
     for shap_ix, shap in enumerate(shapelets):
@@ -19,7 +24,9 @@ def logloss_fitness(X, y, shapelets, cache=None, verbose=False):
             D[:, shap_ix] = cache_val
 
     # Fill up the 0 entries
-    _pdist(X, [shap.flatten() for shap in shapelets], D)
+
+    res = dist_function(X, [shap.flatten() for shap in shapelets], D)
+    if (dist_func_returns): D = res
 
     # Fill up our cache
     for shap_ix, shap in enumerate(shapelets):
