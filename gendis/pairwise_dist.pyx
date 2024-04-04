@@ -20,7 +20,7 @@ def _pdist(np.ndarray[DTYPE_t, ndim=2] A,
 
     for i in xrange(nA):
         for j in xrange(nB):
-            if result[i, j] == 0:
+            if result[i, j] == -1:
                 min_dist = np.inf
                 for k in xrange(len(A[i]) - len(B[j]) + 1):
                     dist = np.sqrt(np.sum((A[i, k:k+len(B[j])] - B[j])**2))
@@ -43,7 +43,7 @@ def _pdist_location(np.ndarray[DTYPE_t, ndim=2] A,
 
     for i in xrange(nA):
         for j in xrange(nB):
-            if distances[i, j] == 0:
+            if distances[i, j] == -1:
                 min_dist = np.inf
                 loc = 0
                 for k in xrange(len(A[i]) - len(B[j]) + 1):
