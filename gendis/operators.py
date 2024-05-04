@@ -42,16 +42,14 @@ def kmeans(X, n_shapelets, min_len_series, max_len, n_draw=None, min_len=4):
         n_draw = max(n_shapelets, int(np.sqrt(len(X))))
     shp_len = np.random.randint(max(4, min_len), min(min_len_series, max_len))
     indices_ts = np.random.choice(len(X), size=n_draw, replace=True)
-    start_idx = np.random.choice(min_len_series - shp_len, size=n_draw, 
-                                 replace=True)
+    start_idx = np.random.choice(min_len_series - shp_len, size=n_draw, replace=True)
     end_idx = start_idx + shp_len
 
     subseries = np.zeros((n_draw, shp_len))
     for i in range(n_draw):
         subseries[i] = X[indices_ts[i]][start_idx[i]:end_idx[i]]
 
-    tskm = TimeSeriesKMeans(n_clusters=n_shapelets, metric="euclidean", 
-                            verbose=False)
+    tskm = TimeSeriesKMeans(n_clusters=n_shapelets, metric="euclidean", verbose=False)
     return tskm.fit(subseries).cluster_centers_
 
 ##########################################################################
@@ -87,13 +85,14 @@ def remove_shapelet(shapelets, toolbox):
 
     return shapelets,
 
-
 def mask_shapelet(shapelets, toolbox):
+    shap_min_n = 4
     """Mask part of a random shapelet from the individual"""
     rand_shapelet = np.random.randint(len(shapelets))
-    if len(shapelets[rand_shapelet]) > 4:
-        rand_start = np.random.randint(len(shapelets[rand_shapelet]) - 4)
-        rand_end = np.random.randint(rand_start + 4, len(shapelets[rand_shapelet]))
+    len_shap = len(shapelets[rand_shapelet])
+    if len_shap > shap_min_n:
+        rand_start = np.random.randint(len_shap - shap_min_n)
+        rand_end = np.random.randint(rand_start + shap_min_n, len_shap)
         shapelets[rand_shapelet] = shapelets[rand_shapelet][rand_start:rand_end]
 
     return shapelets,

@@ -3,17 +3,18 @@ from sklearn.linear_model import LogisticRegression
 import numpy as np
 
 
-def logloss_fitness(D, y, verbose=False):
+def logloss_fitness(D, y, shaps=None):
     """Calculate the fitness of an individual/shapelet set"""
     lr = LogisticRegression(multi_class='multinomial', solver='lbfgs')
     lr.fit(D, y)
     preds = lr.predict_proba(D)
     cv_score = -log_loss(y, preds)
+
     return {
-        'value':  (cv_score, -D.shape[1]),
+        'value':  (cv_score, sum([len(x) for x in shaps])),
         'info': {
             'mean': D.mean()
-        }
+        } 
     }
     
 

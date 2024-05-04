@@ -22,6 +22,7 @@ import multiprocessing
 
 # ML
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.preprocessing import StandardScaler
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
 
@@ -185,7 +186,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             max_len=None,
             min_len=0, 
             fitness=None,
-            init_ops=[random_shapelet, kmeans], 
+            init_ops=[random_shapelet, kmeans],
             cx_ops=[merge_crossover, point_crossover, shap_point_crossover], 
             mut_ops=[add_shapelet, remove_shapelet, mask_shapelet],
             dist_threshold=1.0,
@@ -246,14 +247,19 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         else:
             return _X
 
-    def _convert_y(self, y):
+    def _convert_y(self, y, convert_categorical=False):
         y = copy.deepcopy(y)
-        # Map labels to [0, ..., C-1]
-        for j, c in enumerate(np.unique(y)):
-            self.label_mapping[c] = j
 
-        # Use pandas map function and convert to numpy
-        y = np.reshape(pd.Series(y).map(self.label_mapping).values, (-1, 1))
+        if isinstance(y, pd.Series):
+            y = y.values
+
+        if convert_categorical:
+            # Map labels to [0, ..., C-1]
+            for j, c in enumerate(np.unique(y)):
+                self.label_mapping[c] = j
+
+            # Use pandas map function and convert to numpy
+            y = np.reshape(pd.Series(y).map(self.label_mapping).values, (-1, 1))
 
         return y
 
@@ -267,8 +273,10 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         if it == 1:
             # Print the header of the statistics
             print('it\t\tavg\t\tstd\t\tmax\t\ttime')
+            #print('it\t\tavg\t\tmax\t\ttime')
 
         print('{}\t\t{}\t\t{}\t\t{}\t{}'.format(
+        # print('{}\t\t{}\t\t{}\t{}'.format(
             it,
             np.around(stats['avg'], 4),
             np.around(stats['std'], 3),
@@ -313,19 +321,24 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
     def _eval_individual(self, shaps, return_info=False):
             """Evaluate the fitness of an individual"""
-            D = calculate_shapelet_dist_matrix(
+            D, _ = calculate_shapelet_dist_matrix(
                 self.X, shaps, 
                 dist_function=self.dist_function, 
+                return_positions=False,
                 dist_func_returns=self.dist_func_returns, 
-                cache=self.cache, verbose=self.verbose
+                cache=self.cache, 
+                verbose=self.verbose
                 )
-            res = self.fitness(
-                D=D, y=self.y, verbose=self.verbose
-            )
+            fit = self.fitness(D=D, y=self.y, shaps=shaps)
 
-            if return_info: return res
-            return res["value"]
-            
+            if return_info: return fit
+            return fit["value"]
+
+    def _safe_std(*args, **kwargs):
+        try:
+            return np.std(*args, **kwargs)
+        except ZeroDivisionError:
+            return 0
 
     def fit(self, X, y, convert_categorical_labels=False):
         """Extract shapelets from the provided timeseries and labels.
@@ -340,10 +353,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             The target values.
         """
         self.X = self._preprocess_series(self._convert_X(X))
-        if (convert_categorical_labels):
-            self.y = self._convert_y(y)      
-        else:
-            self.y = y
+        self.y = self._convert_y(y, convert_categorical_labels)    
         self._min_length_series = min([len(x) for x in self.X])
 
         if self._min_length_series <= 4:
@@ -412,10 +422,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             )
 
         toolbox.register("create", create_individual)
-        toolbox.register("individual",  tools.initIterate,
-                         creator.Individual, toolbox.create)
-        toolbox.register("population", tools.initRepeat,
-                         list, toolbox.individual)
+        toolbox.register(
+            "individual", tools.initIterate, creator.Individual, toolbox.create)
+        toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
         toolbox.register("evaluate", self._eval_individual)
         # Small tournaments to ensure diversity
@@ -424,10 +433,10 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         # Set up the statistics. We will measure the mean, std dev and max
         stats = tools.Statistics(key=lambda ind: ind.fitness.values[0])
 
-        stats.register("avg", np.mean)
-        stats.register("std", np.std)
-        stats.register("max", np.max)
-        stats.register("min", np.min)
+        stats.register("avg", lambda arr: np.ma.masked_invalid(arr).mean())
+        stats.register("std", lambda arr: np.ma.masked_invalid(arr).std())
+        stats.register("max", lambda arr: np.ma.masked_invalid(arr).max())
+        stats.register("min", lambda arr: np.ma.masked_invalid(arr).min())
         # stats.register("q25", lambda x: np.quantile(x, 0.25))
         # stats.register("q75", lambda x: np.quantile(x, 0.75))
 
@@ -523,7 +532,19 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         del self.X, self.y
 
 
-    def transform(self, X, shapelets=None):
+    def get_updated_coverage_weights(self, X, y, W=None, penalty=0.25):
+        assert self.is_fitted, "Fit the gendis model first calling fit()"
+
+        if W is None:
+            W = np.ones(len(X))
+
+        D = self.transform(X=X, shapelets=shapelets)
+        subgroup = self.fitness.filter_subgroup_shapelets(D, y)
+        W[subgroup] -= penalty
+        return W
+
+
+    def transform(self, X, shapelets=None, return_positions=False, standardize=False):
         """After fitting the Extractor, we can transform collections of 
         timeseries in matrices with distances to each of the shapelets in
         the evolved shapelet set.
@@ -546,15 +567,34 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         if shapelets is None:
             shapelets = self.best['shapelets']
 
+        index = None
+        if hasattr(X, 'index'):
+            index = X.index
+
         X = self._preprocess_series(self._convert_X(X))
         check_is_fitted(self, ['is_fitted'])
-                
-        return calculate_shapelet_dist_matrix(
+
+        D, L = calculate_shapelet_dist_matrix(
             X, shapelets, 
             dist_function=self.dist_function, 
             dist_func_returns=self.dist_func_returns, 
-            cache=None, verbose=False
+            return_positions=return_positions,
+            cache=None, 
+            verbose=False
         )
+
+        if standardize:
+            scaler = StandardScaler()
+            return np.absolute(scaler.fit_transform(D))   
+
+        cols = [f'D_{i}' for i in range(D.shape[1])]
+        if return_positions:
+            data = np.hstack((D, L))
+            cols += [f'L_{i}' for i in range(L.shape[1])]
+        else:
+            data, cols = D, None
+            
+        return pd.DataFrame(data=data, columns=cols, index=index)
 
     def fit_transform(self, X, y):
         """Combine both the fit and transform method in one.
@@ -599,11 +639,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         assert self.is_fitted, "Fit the gendis model first calling fit()"
 
         D = self.transform(X=X, shapelets=shapelets)
-        sg_filter = SubgroupDistance.filter_subgroup_shapelets(
-            y, D, shapelet_dist_threshold=self.dist_threshold, return_filter=True
-        )
-        [sg_indexes] = np.where(sg_filter)
-        [not_sg_indexes] = np.where(~sg_filter)
+        subgroup = self.fitness.filter_subgroup_shapelets(D, y)
+        [sg_indexes] = np.where(subgroup)
+        [not_sg_indexes] = np.where(~subgroup)
 
         return sg_indexes, not_sg_indexes
 

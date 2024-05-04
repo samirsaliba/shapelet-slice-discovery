@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.stats import wasserstein_distance, mannwhitneyu
+from sklearn.preprocessing import StandardScaler
 
 class SubgroupDistance:
     """
@@ -11,22 +12,32 @@ class SubgroupDistance:
         The threshold for the distance matrix
     """
 
-    def __init__(self, distance_function, shapelet_dist_threshold, min_support, alpha=1):
+    def __init__(
+        self, 
+        distance_function, 
+        shapelet_dist_threshold, 
+        min_support, 
+        coverage_weights=None,
+        standardize=False
+    ):
         self.shapelet_dist_threshold = shapelet_dist_threshold
         self.distance_function = distance_function
-        if min_support is None: min_support = -1
-        self.min_support = min_support
-        self.alpha = alpha
+        self.min_support = min_support if min_support is not None else -1
+        self.standardize = standardize
+        self.coverage_weights = coverage_weights
+        self.coverage_alpha = 2
 
-    def __call__(self, D, y, verbose=False):
-        return self.distance(D, y, verbose)
+    def __call__(self, D, y, shaps=None):
+        return self.distance(D, y)
 
-    def coverage_factor(self, n_sg, n):
-        # See https://pysubgroup.readthedocs.io/en/latest/sections/components/targets.html#numeric-targets
-        return (n_sg/n) ** self.alpha
+    def coverage_factor(self, subgroup):
+        if self.coverage_weights is None:
+            return 1
 
-    @staticmethod
-    def filter_subgroup_shapelets(y, D, shapelet_dist_threshold, return_filter=False):
+        covered = self.coverage_weights[subgroup] 
+        return ( sum(covered) / len(covered) ) ** self.coverage_alpha
+
+    def filter_subgroup_shapelets(self, D, y):
         """
         Parameters
         ----------
@@ -36,41 +47,46 @@ class SubgroupDistance:
             The distance matrix
         shapelet_dist_threshold : float
             The threshold for the distance matrix
-        return_filter : bool, optional
-            If True, return the filter instead of the filtered arrays
 
         Returns
         -------
-        y_in : array-like
-            The target variable filtered by the distance matrix
-        y_out : array-like
-            The target variable filtered by the distance matrix
+        subgroup : array-like
+            Boolean array indicating whether instance i
+            belongs to subgroup
 
         """
-
-        subgroup_filter = np.all(D <= shapelet_dist_threshold, axis=1)
-        if return_filter:
-            return subgroup_filter
-        y_in, y_out = y[subgroup_filter], y[~subgroup_filter]
-        return y_in, y_out
-
-    def distance(self, D, y, verbose=False):
-        subgroup_y, rest_y = self.filter_subgroup_shapelets(
-            y, D, self.shapelet_dist_threshold)
-        subgroup_error_mean = np.mean(subgroup_y)
-        if min(len(subgroup_y), len(rest_y)) < self.min_support:
-            res, dist = 0, None
+        if self.standardize:
+            _D = np.absolute(StandardScaler().fit_transform(D))
         else:
-            dist = self.distance_function(subgroup_y, rest_y)
-            res = self.coverage_factor(n_sg=len(subgroup_y), n=len(y)) * dist
+            _D = D
+        return np.all(_D <= self.shapelet_dist_threshold, axis=1)
 
+
+    def distance(self, D, y):
+        subgroup = self.filter_subgroup_shapelets(D, y)
+        subgroup_y = y[subgroup]
+        subgroup_n = sum(subgroup)
+
+        fitness = -np.inf
+        subgroup_mean_distance = np.inf
+        coverage_weight = None
+        dist = None
+
+        if subgroup_n  >= self.min_support:
+            subgroup_mean_distance = D[subgroup].mean(0).min()
+            dist = self.distance_function(subgroup_y, y)
+            coverage_weight = self.coverage_factor(subgroup)
+            fitness =  coverage_weight * dist
+
+        sg_mean = np.mean(subgroup_y)
         return {
-            'value': (res, -D.shape[1], subgroup_error_mean),
+            'value': (fitness, subgroup_mean_distance, sg_mean),
             'info': {
                 'dist': dist,
-                'subgroup_error_mean': subgroup_error_mean,
-                'rest_error_mean': np.mean(rest_y),
-                'subgroup_size': len(subgroup_y),
+                'coverage_weight': coverage_weight,
+                'subgroup_error_mean': sg_mean,
+                'population_mean': np.mean(y),
+                'subgroup_size': subgroup_n,
             }
         }
 
