@@ -1,5 +1,5 @@
 # Standard lib
-from collections import defaultdict, Counter, OrderedDict
+from collections import OrderedDict
 import copy
 import array
 import time
@@ -14,7 +14,7 @@ import pandas as pd
 import pickle
 
 # Evolutionary algorithms framework
-from deap import base, creator, algorithms, tools
+from deap import base, creator, tools
 
 # Parallelization
 from pathos.multiprocessing import ProcessingPool as Pool
@@ -23,21 +23,14 @@ import multiprocessing
 # ML
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import StandardScaler
-from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
 
-# Custom fitness function
-try:
-    from subgroup_distance import SubgroupDistance
-
-except:
-    from gendis.subgroup_distance import SubgroupDistance
 
 # Pairwise distances
 try:
-    from pairwise_dist import _pdist, _pdist_location
+    from pairwise_dist import _pdist
 except:
-    from gendis.pairwise_dist import _pdist, _pdist_location
+    from gendis.pairwise_dist import _pdist
 
 try:
     from shapelets_distances import calculate_shapelet_dist_matrix, dtw
@@ -48,18 +41,23 @@ except:
 # Custom genetic operators
 try:
     from operators import random_shapelet, kmeans
-    from operators import add_shapelet, remove_shapelet, mask_shapelet
-    from operators import (merge_crossover, point_crossover,
-                           shap_point_crossover)
+    from operators import (
+        add_shapelet, remove_shapelet, mask_shapelet, smooth_shapelet
+    )
+    from operators import (
+        merge_crossover, point_crossover, shap_point_crossover
+    )
 except:
     from gendis.operators import random_shapelet, kmeans
-    from gendis.operators import add_shapelet, remove_shapelet, mask_shapelet
-    from gendis.operators import (merge_crossover, point_crossover,
-                                  shap_point_crossover)
+    from gendis.operators import (
+        add_shapelet, remove_shapelet, mask_shapelet, 
+    )
+    from gendis.operators import (
+        merge_crossover, point_crossover, shap_point_crossover
+    )
 
 from dtaidistance.preprocessing import differencing
 
-from inspect import signature
 # Ignore warnings
 import warnings
 warnings.filterwarnings('ignore')
@@ -168,6 +166,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             'returns': True
         }
     }
+    
 
 
     def __init__(self, 
@@ -188,7 +187,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             fitness=None,
             init_ops=[random_shapelet, kmeans],
             cx_ops=[merge_crossover, point_crossover, shap_point_crossover], 
-            mut_ops=[add_shapelet, remove_shapelet, mask_shapelet],
+            mut_ops=[add_shapelet, remove_shapelet, mask_shapelet, smooth_shapelet],
             dist_threshold=1.0,
         ):
 
@@ -219,14 +218,16 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.shapelets = []
 
     def _set_fitness_function(self, fitness):
-        assert fitness is not None, "Please include a fitness function via fitness parameter. See fitness.logloss_fitness for classification or \
-        subgroup_distance.SubgroupDistance for subgroup search"
+        assert fitness is not None, "Please include a fitness function via fitness parameter.\
+            See fitness.logloss_fitness for classification or \
+            subgroup_distance.SubgroupDistance for subgroup search"
         assert callable(fitness)
         self.fitness = fitness
 
     def _set_distance_function(self, dist_function):
         dist_function = dist_function.lower()
-        assert_error_msg = f"Distance function not recognized. Options are {', '.join(self.dist_function_options)}"
+        assert_error_msg = f"Distance function not recognized. \
+            Options are {', '.join(self.dist_function_options)}"
         assert dist_function in self.dist_function_options.keys(), assert_error_msg
         self.dist_function = self.dist_function_options[dist_function]['function']
         self.dist_func_returns = self.dist_function_options[dist_function]['returns']

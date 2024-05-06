@@ -69,6 +69,15 @@ def add_noise(shapelets, toolbox):
 
     return shapelets,
 
+def smooth_shapelet(shapelets, toolbox):
+    """Smooth a random shapelet"""
+    window = 3
+    rand_shapelet = np.random.randint(len(shapelets))
+    shap = shapelets[rand_shapelet]
+    shap = np.convolve(shap, np.ones(window), 'valid') / window
+    shapelets[rand_shapelet] = shap
+    return shapelets,
+
 
 def add_shapelet(shapelets, toolbox):
     """Add a shapelet to the individual"""
