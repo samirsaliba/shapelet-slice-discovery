@@ -13,29 +13,30 @@ class SubgroupDistance:
     """
 
     def __init__(
-        self, 
+        self,
         distance_function, 
         shapelet_dist_threshold, 
-        min_support, 
+        min_support,
+        cov_alpha,
+        cov_weights,
         coverage_weights=None,
         standardize=False
     ):
+        self.cov_alpha = cov_alpha
+        self.cov_weights = cov_weights
         self.shapelet_dist_threshold = shapelet_dist_threshold
         self.distance_function = distance_function
         self.min_support = min_support if min_support is not None else -1
         self.standardize = standardize
-        self.coverage_weights = coverage_weights
-        self.coverage_alpha = 2
 
     def __call__(self, D, y, shaps=None):
         return self.distance(D, y)
 
     def coverage_factor(self, subgroup):
-        if self.coverage_weights is None:
-            return 1
-
-        covered = self.coverage_weights[subgroup] 
-        return ( sum(covered) / len(covered) ) ** self.coverage_alpha
+        """Multiplicative weighted covering score"""
+        in_sg_weights = self.cov_weights[subgroup].sum()
+        sg_weights_total = subgroup.sum() * self.cov_alpha
+        return in_sg_weights / sg_weights_total
 
     def filter_subgroup_shapelets(self, D, y):
         """
@@ -69,21 +70,21 @@ class SubgroupDistance:
 
         fitness = -np.inf
         subgroup_mean_distance = np.inf
-        coverage_weight = None
+        covW = None
         dist = None
 
         if subgroup_n  >= self.min_support:
             subgroup_mean_distance = D[subgroup].mean(0).min()
             dist = self.distance_function(subgroup_y, y)
-            coverage_weight = self.coverage_factor(subgroup)
-            fitness =  coverage_weight * dist
+            covW = self.coverage_factor(subgroup)
+            fitness =  covW * dist
 
         sg_mean = np.mean(subgroup_y)
         return {
-            'value': (fitness, subgroup_mean_distance, sg_mean),
+            'value': np.array([fitness]),
             'info': {
                 'dist': dist,
-                'coverage_weight': coverage_weight,
+                'coverage_weight': covW,
                 'subgroup_error_mean': sg_mean,
                 'population_mean': np.mean(y),
                 'subgroup_size': subgroup_n,

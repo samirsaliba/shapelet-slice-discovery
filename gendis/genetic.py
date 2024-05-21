@@ -50,7 +50,7 @@ try:
 except:
     from gendis.operators import random_shapelet, kmeans
     from gendis.operators import (
-        add_shapelet, remove_shapelet, mask_shapelet, 
+        add_shapelet, remove_shapelet, mask_shapelet, smooth_shapelet
     )
     from gendis.operators import (
         merge_crossover, point_crossover, shap_point_crossover
@@ -197,11 +197,11 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         # Hyper-parameters
         self.population_size = population_size
         self.iterations = iterations
-        self.verbose = verbose
         self.mutation_prob = mutation_prob
         self.crossover_prob = crossover_prob
         self.plot = plot
         self.wait = wait
+        self.verbose = verbose
         self.n_jobs = n_jobs
         self.normed = normed
         self.min_len = min_len
@@ -231,8 +231,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         assert dist_function in self.dist_function_options.keys(), assert_error_msg
         self.dist_function = self.dist_function_options[dist_function]['function']
         self.dist_func_returns = self.dist_function_options[dist_function]['returns']
-
-
+   
     def _convert_X(self, X):
         _X = copy.deepcopy(X)
         if isinstance(_X, list):
@@ -319,6 +318,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             'info': ind_score['info'],
             'shapelets': best_shapelets
         }
+ 
 
     def _eval_individual(self, shaps, return_info=False):
             """Evaluate the fitness of an individual"""
@@ -376,8 +376,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         # We will try to maximize the negative logloss of LR in CV.
         # In the case of ties, we pick the one with least number of shapelets
         # 0.0 refers to subgroup mean, doesn't change calculations but we'll use for logging
-        weights = (1.0, -1.0, 0.0)
-        creator.create("FitnessMax", base.Fitness, weights=weights)
+        # weights = (1.0) #(1.0, -1.0, 0.0)
+        creator.create("FitnessMax", base.Fitness, weights=[1.0])
 
         # Individual are lists (of shapelets (list))
         creator.create("Individual", list, fitness=creator.FitnessMax)
@@ -533,18 +533,30 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         del self.X, self.y
 
 
-    def get_updated_coverage_weights(self, X, y, W=None, penalty=0.25):
+    def update_coverage_weights(self, X, y, cov_alpha, coverage):
         assert self.is_fitted, "Fit the gendis model first calling fit()"
+        coverage = copy.deepcopy(coverage)
 
-        if W is None:
-            W = np.ones(len(X))
-
-        D = self.transform(X=X, shapelets=shapelets)
+        D, _ = calculate_shapelet_dist_matrix(
+            X, self.best["shapelets"], 
+            dist_function=self.dist_function, 
+            return_positions=False,
+            dist_func_returns=self.dist_func_returns, 
+            cache=self.cache, 
+            verbose=self.verbose
+        )
         subgroup = self.fitness.filter_subgroup_shapelets(D, y)
-        W[subgroup] -= penalty
-        return W
 
+        # Since we have just created a new subgroup,
+        # we add +1 to every subgroup member instance counts
+        coverage[subgroup] += 1
 
+        # Raise alpha to the 'counts' for each instance
+        # That's how much each instance will contribute to a next iteration
+        base = [cov_alpha]
+        return np.power(base, coverage), coverage
+        
+        
     def transform(self, X, shapelets=None, return_positions=False, standardize=False):
         """After fitting the Extractor, we can transform collections of 
         timeseries in matrices with distances to each of the shapelets in
@@ -580,7 +592,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             dist_function=self.dist_function, 
             dist_func_returns=self.dist_func_returns, 
             return_positions=return_positions,
-            cache=None, 
+            cache=self.cache, 
             verbose=False
         )
 

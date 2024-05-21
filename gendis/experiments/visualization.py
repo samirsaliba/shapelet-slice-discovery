@@ -55,10 +55,12 @@ def plot_k_series_with_shaps(X, k, shap, ascending=True, X_ordered=False):
     
     # Plot setup
     axs_multiplier = 1
+    width = 2*axs_multiplier*6.4
+    height = (k//5 + 1)*axs_multiplier*4.8
     f, axs = plt.subplots(
         k, 1, 
         sharex=True, 
-        figsize=(2*axs_multiplier*6.4, axs_multiplier*4.8),
+        figsize=(width, height),
         gridspec_kw={'hspace': 0.1,}
     )
     

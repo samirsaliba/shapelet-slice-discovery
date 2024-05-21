@@ -71,10 +71,14 @@ def add_noise(shapelets, toolbox):
 
 def smooth_shapelet(shapelets, toolbox):
     """Smooth a random shapelet"""
-    window = 3
     rand_shapelet = np.random.randint(len(shapelets))
     shap = shapelets[rand_shapelet]
-    shap = np.convolve(shap, np.ones(window), 'valid') / window
+
+    window = 5
+    shap = np.ravel(shap)
+    shap_mva = np.convolve(shap, np.ones(window), 'valid') / window
+    fill = np.full(shape=len(shap)-len(shap_mva), fill_value=shap_mva[-1])
+    shap = np.concatenate([shap_mva, fill])
     shapelets[rand_shapelet] = shap
     return shapelets,
 
