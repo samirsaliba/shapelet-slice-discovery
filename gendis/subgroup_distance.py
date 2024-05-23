@@ -32,6 +32,9 @@ class SubgroupDistance:
     def __call__(self, D, y, shaps=None):
         return self.distance(D, y)
 
+    def update_weights(self, cov_weights):
+        self.cov_weights=cov_weights
+
     def coverage_factor(self, subgroup):
         """Multiplicative weighted covering score"""
         in_sg_weights = self.cov_weights[subgroup].sum()
