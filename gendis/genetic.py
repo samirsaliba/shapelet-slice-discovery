@@ -40,20 +40,17 @@ except:
 
 # Custom genetic operators
 try:
-    from operators import random_shapelet, kmeans
-    from operators import (
-        add_shapelet, remove_shapelet, mask_shapelet, smooth_shapelet
+    from initialization import random_shapelet, kmeans
+    from crossover import crossover_AND, crossover_uniform
+    from mutation import (
+        add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
     )
-    from operators import (
-        merge_crossover, point_crossover, shap_point_crossover
-    )
+
 except:
-    from gendis.operators import random_shapelet, kmeans
-    from gendis.operators import (
-        add_shapelet, remove_shapelet, mask_shapelet, smooth_shapelet
-    )
-    from gendis.operators import (
-        merge_crossover, point_crossover, shap_point_crossover
+    from gendis.initialization import random_shapelet, kmeans
+    from gendis.crossover import crossover_AND, crossover_uniform
+    from gendis.mutation import (
+        add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
     )
 
 from dtaidistance.preprocessing import differencing
@@ -177,20 +174,20 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             verbose=False, 
             normed=False, 
             mutation_prob=0.1, 
+            crossover_prob=0.4,
+            coverage_alpha=0.5,
             wait=10, 
             plot=None, 
             max_shaps=None, 
-            crossover_prob=0.4, 
             n_jobs=1, 
             max_len=None,
             min_len=0, 
             fitness=None,
             init_ops=[random_shapelet],
-            cx_ops=[merge_crossover, point_crossover, shap_point_crossover], 
-            mut_ops=[add_shapelet, remove_shapelet, mask_shapelet, smooth_shapelet],
+            cx_ops=[crossover_AND, crossover_uniform], 
+            mut_ops=[add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet],
             dist_threshold=1.0,
         ):
-
         self._set_distance_function(dist_function)
         self._set_fitness_function(fitness)
         self.apply_differencing = apply_differencing
@@ -199,6 +196,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.iterations = iterations
         self.mutation_prob = mutation_prob
         self.crossover_prob = crossover_prob
+        self.coverage_alpha = coverage_alpha
         self.plot = plot
         self.wait = wait
         self.verbose = verbose
@@ -345,6 +343,58 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
     def rebuild_diffed(series):
         return np.insert(series.cumsum(), 0, 0)
 
+    def _early_stopping_check(self, it):
+        return (
+            not isinf(self.best["score"]) # If score is inf don't stop
+            and it - self.best["it"] > self.wait
+        )
+
+    def _update_coverage(self, ind, coverage):
+        D, _ = calculate_shapelet_dist_matrix(
+            self.X, ind["shapelets"], 
+            dist_function=self.dist_function, 
+            return_positions=False,
+            dist_func_returns=self.dist_func_returns, 
+            cache=self.cache, 
+            verbose=self.verbose
+        )
+        subgroup = self.fitness.filter_subgroup_shapelets(D, self.y)
+
+        # Since we have just created a new subgroup,
+        # we add +1 to every subgroup member instance counts
+        coverage[subgroup] += 1
+        # Raise alpha to the 'counts' for each instance
+        # That's how much each instance will contribute to a next iteration
+        base = [cov_alpha]
+        return np.power(base, coverage), coverage
+
+    def _coverage_factor(self, cov_weights, subgroup):
+        """Multiplicative weighted covering score"""
+        in_sg_weights = cov_weights[subgroup].sum()
+        sg_weights_total = subgroup.sum() * self.coverage_alpha
+        return in_sg_weights / sg_weights_total
+
+    def _update_kbest(pop):
+        pop = list(map(toolbox.clone, pop))
+        coverage = np.ones(len(X_train))
+        cov_weights = np.power([self.coverage_alpha], coverage)
+
+        best = max(pop, key=lambda ind: ind["fitness"])
+        top_k = [best]
+
+        for i in range(10):
+            # Update coverage and coverage_weights
+            cov_weights, coverage = self._update_coverage(best, coverage)
+            
+            # Now update fitnesses again
+            # For each individual, update fitness based on cov_weights
+            for ind in pop:
+                ind["fitness"] *= _coverage_factor(cov_weights, ind["subgroup"])
+
+            # Get best individual
+            best = max(pop, key=lambda ind: ind["fitness"])
+            top_k.append(best)
+
     def fit(self, X, y, convert_categorical_labels=False):
         """Extract shapelets from the provided timeseries and labels.
 
@@ -402,7 +452,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             toolbox.register("map", map)
 
         # Register all our operations to the DEAP toolbox
-        toolbox.register("merge", merge_crossover)
+        # toolbox.register("merge", merge_crossover)
         deap_cx_ops = []
         for i, cx_op in enumerate(self.cx_ops):
             toolbox.register(f"cx{i}", cx_op)
@@ -474,10 +524,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         while it <= self.iterations:
 
             # Early stopping
-            if (
-                not isinf(self.best["score"])
-                and it - self.best["it"] > self.wait
-            ):
+            if self._early_stopping_check(it):
                 break
 
             gen_start = time.time()
@@ -516,6 +563,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             pop[:] = new_pop + fittest_ind
             it_stats = stats.compile(pop)
             self.history.append([it, it_stats])
+
+            # Update bag of best individuals
+            self._update_kbest(pop)
 
             # Print our statistics
             if self.verbose:

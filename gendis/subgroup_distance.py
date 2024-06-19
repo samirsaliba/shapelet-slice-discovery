@@ -93,6 +93,7 @@ class SubgroupDistance:
             'info': {
                 'fitness': fitness,
                 'dist': dist,
+                'subgroup': subgroup,
                 'subgroup_size_weight': sizeW,
                 'coverage_weight': covW,
                 'subgroup_error_mean': sg_mean,
