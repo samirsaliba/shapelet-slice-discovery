@@ -39,17 +39,31 @@ except:
 
 
 # Custom genetic operators
+# try:
+#     from initialization import random_shapelet, kmeans
+#     from crossover import crossover_AND, crossover_uniform
+#     from mutation import (
+#         add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
+#     )
+
+# except:
+#     from gendis.initialization import random_shapelet, kmeans
+#     from gendis.crossover import crossover_AND, crossover_uniform
+#     from gendis.mutation import (
+#         add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
+#     )
+
 try:
-    from initialization import random_shapelet, kmeans
-    from crossover import crossover_AND, crossover_uniform
-    from mutation import (
+    from operators import (
+        random_shapelet, kmeans,
+        crossover_AND, crossover_uniform,
         add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
     )
 
 except:
-    from gendis.initialization import random_shapelet, kmeans
-    from gendis.crossover import crossover_AND, crossover_uniform
-    from gendis.mutation import (
+    from gendis.operators import (
+        random_shapelet, kmeans,
+        crossover_AND, crossover_uniform,
         add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
     )
 
@@ -565,7 +579,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             self.history.append([it, it_stats])
 
             # Update bag of best individuals
-            self._update_kbest(pop)
+            # self._update_kbest(pop)
 
             # Print our statistics
             if self.verbose:
