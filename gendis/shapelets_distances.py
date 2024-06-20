@@ -10,11 +10,9 @@ except:
 
 def calculate_shapelet_dist_matrix(
     X, shapelets, 
-    dist_function, 
-    dist_func_returns,
+    dist_function,
     return_positions=False,
-    cache=None, 
-    verbose=False
+    cache=None
     ):
     """Calculate the distance matrix for a set of shapelets"""
     D = -1 * np.ones((len(X), len(shapelets)))
@@ -30,8 +28,7 @@ def calculate_shapelet_dist_matrix(
 
     # Fill up the 0 entries
     res = dist_function(X, [shap.flatten() for shap in shapelets], D)
-    if dist_func_returns: 
-        D = res[:,0,:]
+    D = res[:,0,:]
 
     if return_positions:
         L = res[:,1,:]

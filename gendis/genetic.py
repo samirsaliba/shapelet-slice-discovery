@@ -25,13 +25,6 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.validation import check_is_fitted
 
-
-# Pairwise distances
-try:
-    from pairwise_dist import _pdist
-except:
-    from gendis.pairwise_dist import _pdist
-
 try:
     from shapelets_distances import calculate_shapelet_dist_matrix, dtw
 except:
@@ -163,48 +156,28 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
     >>> lr.score(distances, y)
     1.0
     """
-    dist_function_options = {
-        'original': {
-            'function': _pdist,
-            'returns': False
-        },
-        'pairwise_euclidean': {
-            'function': _pdist,
-            'returns': False
-        },
-        'dtw': {
-            'function': dtw,
-            'returns': True
-        }
-    }
-    
-
-
-    def __init__(self, 
-            dist_function,
-            apply_differencing,
-            population_size=50, 
-            iterations=25, 
-            verbose=False, 
-            normed=False, 
-            mutation_prob=0.1, 
-            crossover_prob=0.4,
-            coverage_alpha=0.5,
-            wait=10, 
-            plot=None, 
-            max_shaps=None, 
-            n_jobs=1, 
-            max_len=None,
-            min_len=0, 
-            fitness=None,
-            init_ops=[random_shapelet],
-            cx_ops=[crossover_AND, crossover_uniform], 
-            mut_ops=[add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet],
-            dist_threshold=1.0,
-        ):
-        self._set_distance_function(dist_function)
+    def __init__(
+        self,
+        fitness,
+        population_size, 
+        iterations, 
+        mutation_prob, 
+        crossover_prob,
+        coverage_alpha=0.5,
+        wait=10, 
+        plot=None, 
+        max_shaps=None, 
+        n_jobs=1, 
+        max_len=None,
+        min_len=0, 
+        init_ops=[random_shapelet],
+        cx_ops=[crossover_AND, crossover_uniform], 
+        mut_ops=[add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet],
+        dist_threshold=1.0,
+        verbose=False, 
+        normed=False, 
+    ):
         self._set_fitness_function(fitness)
-        self.apply_differencing = apply_differencing
         # Hyper-parameters
         self.population_size = population_size
         self.iterations = iterations
@@ -229,6 +202,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.label_mapping = {}
         self.shapelets = []
 
+        self.apply_differencing = True
+        self.dist_function = dtw
+
     def _set_fitness_function(self, fitness):
         assert fitness is not None, "Please include a fitness function via fitness parameter.\
             See fitness.logloss_fitness for classification or \
@@ -236,50 +212,12 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         assert callable(fitness)
         self.fitness = fitness
 
-    def _set_distance_function(self, dist_function):
-        dist_function = dist_function.lower()
-        assert_error_msg = f"Distance function not recognized. \
-            Options are {', '.join(self.dist_function_options)}"
-        assert dist_function in self.dist_function_options.keys(), assert_error_msg
-        self.dist_function = self.dist_function_options[dist_function]['function']
-        self.dist_func_returns = self.dist_function_options[dist_function]['returns']
-   
-    def _convert_X(self, X):
+    @staticmethod
+    def preprocess_X(X):
         _X = copy.deepcopy(X)
-        if isinstance(_X, list):
-            for i in range(len(_X)):
-                _X[i] = np.array(_X[i])
-            _X = np.array(_X)
-
         if isinstance(_X, pd.DataFrame):
             _X = _X.values
-
-        if _X.dtype != object:
-            return _X.view(np.float64)
-        else:
-            return _X
-
-    def _convert_y(self, y, convert_categorical=False):
-        y = copy.deepcopy(y)
-
-        if isinstance(y, pd.Series):
-            y = y.values
-
-        if convert_categorical:
-            # Map labels to [0, ..., C-1]
-            for j, c in enumerate(np.unique(y)):
-                self.label_mapping[c] = j
-
-            # Use pandas map function and convert to numpy
-            y = np.reshape(pd.Series(y).map(self.label_mapping).values, (-1, 1))
-
-        return y
-
-    def _preprocess_series(self, X):
-        if self.apply_differencing:
-            return np.apply_along_axis(lambda s: differencing(s, smooth=None), 1, X)
-        else:
-            return X
+        return np.apply_along_axis(lambda s: differencing(s, smooth=None), 1, _X)
 
     def _print_statistics(self, it, stats, start):
         if it == 1:
@@ -295,24 +233,6 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             np.around(stats['max'], 6),
             np.around(time.time() - start, 4),
         ))
-
-    def _plot_best(self, offspring, height):
-        if self.population_size <= 20:
-            if self.plot == 'notebook':
-                f, ax = plt.subplots(4, height, sharex=True)
-            for ix, ind in enumerate(offspring):
-                ax[ix//height][ix % height].clear()
-                for s in ind:
-                    ax[ix//height][ix % height].plot(range(len(s)), s)
-            plt.pause(0.001)
-            if self.plot == 'notebook':
-                plt.show()
-
-        else:
-            plt.clf()
-            for shap in self.best['shapelets']:
-                plt.plot(range(len(shap)), shap)
-            plt.pause(0.001)
 
     def _update_best_individual(self, it, new_ind):
         """Update the best individual if we found a better one"""
@@ -331,6 +251,20 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             'shapelets': best_shapelets
         }
  
+    def _create_individual(self, n_shapelets=None):
+        """Generate a random shapelet set"""
+        # if n_shapelets is None:
+        #     n_shapelets = np.random.randint(1, self.max_shaps)
+        n_shapelets = 1
+
+        init_op = np.random.choice(self.init_ops)
+        return init_op(
+            X=self.X, 
+            n_shapelets=n_shapelets, 
+            min_len_series=self._min_length_series, 
+            max_len=self.max_len, 
+            min_len=self.min_len
+        )
 
     def _eval_individual(self, shaps, return_info=False):
             """Evaluate the fitness of an individual"""
@@ -338,9 +272,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                 self.X, shaps, 
                 dist_function=self.dist_function, 
                 return_positions=False,
-                dist_func_returns=self.dist_func_returns, 
-                cache=self.cache, 
-                verbose=self.verbose
+                cache=self.cache
                 )
             fit = self.fitness(D=D, y=self.y, shaps=shaps)
 
@@ -368,9 +300,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             self.X, ind["shapelets"], 
             dist_function=self.dist_function, 
             return_positions=False,
-            dist_func_returns=self.dist_func_returns, 
-            cache=self.cache, 
-            verbose=self.verbose
+            cache=self.cache
         )
         subgroup = self.fitness.filter_subgroup_shapelets(D, self.y)
 
@@ -388,7 +318,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         sg_weights_total = subgroup.sum() * self.coverage_alpha
         return in_sg_weights / sg_weights_total
 
-    def _update_kbest(pop):
+    def _update_top_k(pop):
         pop = list(map(toolbox.clone, pop))
         coverage = np.ones(len(X_train))
         cov_weights = np.power([self.coverage_alpha], coverage)
@@ -403,13 +333,15 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             # Now update fitnesses again
             # For each individual, update fitness based on cov_weights
             for ind in pop:
-                ind["fitness"] *= _coverage_factor(cov_weights, ind["subgroup"])
+                ind["fitness"] *= self._coverage_factor(cov_weights, ind["subgroup"])
 
             # Get best individual
             best = max(pop, key=lambda ind: ind["fitness"])
             top_k.append(best)
+        
+        self.top_k = top_k
 
-    def fit(self, X, y, convert_categorical_labels=False):
+    def fit(self, X, y):
         """Extract shapelets from the provided timeseries and labels.
 
         Parameters
@@ -420,9 +352,10 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         y : array-like, shape = [n_samples]
             The target values.
-        """
-        self.X = self._preprocess_series(self._convert_X(X))
-        self.y = self._convert_y(y, convert_categorical_labels)    
+        """ 
+        self.X = X
+        self.y = y
+
         self._min_length_series = min([len(x) for x in self.X])
 
         if self._min_length_series <= 4:
@@ -437,14 +370,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         if self.max_shaps is None:
             self.max_shaps = int(np.sqrt(self._min_length_series)) + 1
 
-        # Sci-kit learn check for label vector.
-        # check_array(y)
         self.cache = LRUCache(2048)
 
-        # We will try to maximize the negative logloss of LR in CV.
-        # In the case of ties, we pick the one with least number of shapelets
-        # 0.0 refers to subgroup mean, doesn't change calculations but we'll use for logging
-        # weights = (1.0) #(1.0, -1.0, 0.0)
         creator.create("FitnessMax", base.Fitness, weights=[1.0])
 
         # Individual are lists (of shapelets (list))
@@ -476,21 +403,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             toolbox.register(f"mutate{i}", mut_op)
             deap_mut_ops.append(getattr(toolbox, (f"mutate{i}")))
 
-        def create_individual(n_shapelets=None):
-            """Generate a random shapelet set"""
-            if n_shapelets is None:
-                n_shapelets = np.random.randint(2, self.max_shaps)
-
-            init_op = np.random.choice(self.init_ops)
-            return init_op(
-                X=self.X, 
-                n_shapelets=n_shapelets, 
-                min_len_series=self._min_length_series, 
-                max_len=self.max_len, 
-                min_len=self.min_len
-            )
-
-        toolbox.register("create", create_individual)
+        toolbox.register("create", self._create_individual)
         toolbox.register(
             "individual", tools.initIterate, creator.Individual, toolbox.create)
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)
@@ -538,17 +451,12 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         while it <= self.iterations:
 
             # Early stopping
-            if self._early_stopping_check(it):
-                break
+            if self._early_stopping_check(it): break
 
             gen_start = time.time()
 
             # Clone the population into offspring
             offspring = list(map(toolbox.clone, pop))
-
-            # Plot the fittest individual of our population
-            if self.plot is not None:
-                self._plot_best(offspring, height)
 
             # Iterate over all individuals and apply CX with certain prob
             for child1, child2 in zip(offspring[::2], offspring[1::2]):
@@ -579,7 +487,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             self.history.append([it, it_stats])
 
             # Update bag of best individuals
-            # self._update_kbest(pop)
+            self._update_top_k(pop)
 
             # Print our statistics
             if self.verbose:
@@ -595,46 +503,13 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             it += 1
 
         self.pop = pop
-        self.top_10_best = []
-        for ind in tools.selBest(pop, 10):
-            ind_score = self._eval_individual(ind, return_info=True)            
-            ind_info = {
-                'score': ind_score['value'][0],
-                'info': ind_score['info'],
-                'shapelets': ind
-            }
-            ind_info = self.top_10_best.append(ind_info)
-
-        self.best["shaps_undiffed"] = [self.rebuild_diffed(x) for x in self.best["shapelets"]]
+        if apply_differencing:
+            self.best["shaps_undiffed"] = [self.rebuild_diffed(x) for x in self.best["shapelets"]]
+            
         self.is_fitted = True
         del self.X, self.y
 
 
-    def update_coverage_weights(self, X, y, cov_alpha, coverage):
-        assert self.is_fitted, "Fit the gendis model first calling fit()"
-        coverage = copy.deepcopy(coverage)
-
-        X = self._preprocess_series(self._convert_X(X))
-
-        D, _ = calculate_shapelet_dist_matrix(
-            X, self.best["shapelets"], 
-            dist_function=self.dist_function, 
-            return_positions=False,
-            dist_func_returns=self.dist_func_returns, 
-            cache=self.cache, 
-            verbose=self.verbose
-        )
-        subgroup = self.fitness.filter_subgroup_shapelets(D, y)
-
-        # Since we have just created a new subgroup,
-        # we add +1 to every subgroup member instance counts
-        coverage[subgroup] += 1
-        # Raise alpha to the 'counts' for each instance
-        # That's how much each instance will contribute to a next iteration
-        base = [cov_alpha]
-        return np.power(base, coverage), coverage
-        
-        
     def transform(self, X, shapelets=None, return_positions=False, standardize=False):
         """After fitting the Extractor, we can transform collections of 
         timeseries in matrices with distances to each of the shapelets in
@@ -653,21 +528,18 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         if shapelets is None:
             shapelets = self.best['shapelets']
+        
+        assert len(shapelets) > 0, "No shapelets found"
 
         index = None
         if hasattr(X, 'index'):
             index = X.index
 
-        X = self._preprocess_series(self._convert_X(X))
-        check_is_fitted(self, ['is_fitted'])
-
         D, L = calculate_shapelet_dist_matrix(
             X, shapelets, 
             dist_function=self.dist_function, 
-            dist_func_returns=self.dist_func_returns, 
             return_positions=return_positions,
-            cache=None, 
-            verbose=False
+            cache=None
         )
 
         if standardize:
@@ -681,7 +553,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         else:
             data, cols = D, None
             
-        return pd.DataFrame(data=data, columns=cols, index=index), pd.DataFrame(data=X, index=index)
+        return pd.DataFrame(data=data, columns=cols, index=index)
 
     def fit_transform(self, X, y):
         """Combine both the fit and transform method in one.
@@ -702,8 +574,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         """
         # First call fit, then transform
         self.fit(X, y)
-        D = self.transform(X)
-        return D
+        return self.transform(X)
 
     def save(self, path):
         """Write away all hyper-parameters and discovered shapelets to disk"""
@@ -723,16 +594,15 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         - sg_indexes (array): Indexes of instances belonging to subgroups.
         - not_sg_indexes (array): Indexes of instances not belonging to subgroups.
         """
-        check_is_fitted(self, ['is_fitted'])
+        assert self.is_fitted, "Fit the gendis model first calling fit()"
+
         shapelets = self.best["shapelets"]
         
         D, _ = calculate_shapelet_dist_matrix(
             X_diffed, shapelets, 
-            dist_function=self.dist_function, 
-            dist_func_returns=self.dist_func_returns, 
+            dist_function=self.dist_function,
             return_positions=True,
-            cache=None, 
-            verbose=False
+            cache=None
         )
 
         subgroup = self.fitness.filter_subgroup_shapelets(D, y)

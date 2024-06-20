@@ -78,12 +78,14 @@ def add_shapelet(shapelets, toolbox):
 
 def remove_shapelet(shapelets, toolbox):
     """Remove a random shapelet from the individual"""
-    if len(shapelets) > 1:
-        rand_shapelet = np.random.randint(len(shapelets))
-        shapelets.pop(rand_shapelet)
+
+    if len(shapelets) == 1:
+        return replace_shapelet(shapelets, toolbox)
+    
+    rand_shapelet = np.random.randint(len(shapelets))
+    shapelets.pop(rand_shapelet)
 
     return shapelets,
-
 
 def replace_shapelet(shapelets, toolbox):
     """
@@ -99,12 +101,9 @@ def replace_shapelet(shapelets, toolbox):
     if shapelets:
         # Randomly select an index to remove
         remove_index = random.randint(0, len(shapelets) - 1)
-        # Remove the selected shapelet
-        del shapelets[remove_index]
+        shapelets.pop(remove_index)
     
-    # Add a new shapelet
     shapelets.append(toolbox.create(n_shapelets=1))
-    
     return shapelets,
 
 
