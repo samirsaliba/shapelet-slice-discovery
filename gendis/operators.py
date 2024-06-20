@@ -21,10 +21,11 @@ def random_shapelet(X, n_shapelets, min_len_series, max_len, min_len=4):
         rand_length = np.random.randint(max(4, min_len), min(min_len_series, max_len))
         rand_col = np.random.randint(min_len_series - rand_length)
         shaps.append(X[rand_row][rand_col:rand_col+rand_length])
-    if n_shapelets > 1:
-        return np.array(shaps)
-    else:
-        return np.array(shaps[0])
+    # if n_shapelets > 1:
+    #     return np.array(shaps)
+    # else:
+    #     return np.array(shaps[0])
+    return np.array(shaps)
 
 
 def kmeans(X, n_shapelets, min_len_series, max_len, n_draw=None, min_len=4):
@@ -87,6 +88,7 @@ def remove_shapelet(shapelets, toolbox):
 
     return shapelets,
 
+
 def replace_shapelet(shapelets, toolbox):
     """
     Replace a random shapelet in the individual with a newly created one.
@@ -98,12 +100,25 @@ def replace_shapelet(shapelets, toolbox):
     Returns:
     shapelets (list of lists): The modified individual with one shapelet replaced
     """
-    if shapelets:
+    if len(shapelets) > 0:
         # Randomly select an index to remove
         remove_index = random.randint(0, len(shapelets) - 1)
         shapelets.pop(remove_index)
     
     shapelets.append(toolbox.create(n_shapelets=1))
+    return shapelets,
+
+
+def mask_shapelet(shapelets, toolbox):
+    shap_min_n = 4
+    """Mask part of a random shapelet from the individual"""
+    rand_shapelet = np.random.randint(len(shapelets))
+    len_shap = len(shapelets[rand_shapelet])
+    if len_shap > shap_min_n:
+        rand_start = np.random.randint(len_shap - shap_min_n)
+        rand_end = np.random.randint(rand_start + shap_min_n, len_shap)
+        shapelets[rand_shapelet] = shapelets[rand_shapelet][rand_start:rand_end]
+
     return shapelets,
 
 

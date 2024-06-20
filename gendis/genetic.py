@@ -158,6 +158,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
     """
     def __init__(
         self,
+        k,
         fitness,
         population_size, 
         iterations, 
@@ -178,6 +179,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         normed=False, 
     ):
         self._set_fitness_function(fitness)
+        self.k = k
         # Hyper-parameters
         self.population_size = population_size
         self.iterations = iterations
@@ -201,6 +203,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         # Attributes
         self.label_mapping = {}
         self.shapelets = []
+        self.top_k = None
 
         self.apply_differencing = True
         self.dist_function = dtw
@@ -213,11 +216,17 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.fitness = fitness
 
     @staticmethod
-    def preprocess_X(X):
+    def preprocess_input(X, y):
         _X = copy.deepcopy(X)
         if isinstance(_X, pd.DataFrame):
             _X = _X.values
-        return np.apply_along_axis(lambda s: differencing(s, smooth=None), 1, _X)
+        _X = np.apply_along_axis(lambda s: differencing(s, smooth=None), 1, _X)
+
+        y = copy.deepcopy(y)
+        if isinstance(y, pd.Series):
+            y = y.values
+
+        return _X, y
 
     def _print_statistics(self, it, stats, start):
         if it == 1:
@@ -236,7 +245,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
     def _update_best_individual(self, it, new_ind):
         """Update the best individual if we found a better one"""
-        ind_score = self._eval_individual(new_ind, return_info=True)
+        ind_score = self._eval_individual(new_ind)
 
         # Overwrite self.shapelets everytime so we can
         # pre-emptively stop the genetic algorithm
@@ -266,7 +275,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             min_len=self.min_len
         )
 
-    def _eval_individual(self, shaps, return_info=False):
+    def _eval_individual(self, shaps):
             """Evaluate the fitness of an individual"""
             D, _ = calculate_shapelet_dist_matrix(
                 self.X, shaps, 
@@ -274,10 +283,10 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                 return_positions=False,
                 cache=self.cache
                 )
-            fit = self.fitness(D=D, y=self.y, shaps=shaps)
+            return self.fitness(D=D, y=self.y, shaps=shaps)
 
-            if return_info: return fit
-            return fit["value"]
+            # if return_info: return fit
+            # return fit["value"]
 
     def _safe_std(*args, **kwargs):
         try:
@@ -295,51 +304,52 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             and it - self.best["it"] > self.wait
         )
 
-    def _update_coverage(self, ind, coverage):
-        D, _ = calculate_shapelet_dist_matrix(
-            self.X, ind["shapelets"], 
-            dist_function=self.dist_function, 
-            return_positions=False,
-            cache=self.cache
-        )
-        subgroup = self.fitness.filter_subgroup_shapelets(D, self.y)
-
+    def _update_coverage(self, subgroup, coverage):
         # Since we have just created a new subgroup,
         # we add +1 to every subgroup member instance counts
         coverage[subgroup] += 1
         # Raise alpha to the 'counts' for each instance
         # That's how much each instance will contribute to a next iteration
-        base = [cov_alpha]
+        base = [self.coverage_alpha]
         return np.power(base, coverage), coverage
 
-    def _coverage_factor(self, cov_weights, subgroup):
+    def _coverage_factor(self, weights, subgroup):
         """Multiplicative weighted covering score"""
-        in_sg_weights = cov_weights[subgroup].sum()
+        in_sg_weights = weights[subgroup].sum()
         sg_weights_total = subgroup.sum() * self.coverage_alpha
         return in_sg_weights / sg_weights_total
 
-    def _update_top_k(pop):
-        pop = list(map(toolbox.clone, pop))
-        coverage = np.ones(len(X_train))
-        cov_weights = np.power([self.coverage_alpha], coverage)
+    def _update_top_k(self, pop):
+        coverage = np.ones(len(self.X))
+        weights = np.power([self.coverage_alpha], coverage)
 
-        best = max(pop, key=lambda ind: ind["fitness"])
-        top_k = [best]
+        if self.top_k is None:
+            pop_star = pop
+        else:
+            pop_star = self.top_k + pop 
 
-        for i in range(10):
+        best = max(pop_star, key=lambda ind: ind.fitness.values[0])
+        new_top_k = [best]
+
+        for _ in range(self.k):
             # Update coverage and coverage_weights
-            cov_weights, coverage = self._update_coverage(best, coverage)
+            weights, coverage = self._update_coverage(
+                best.subgroup, coverage
+            )
             
             # Now update fitnesses again
-            # For each individual, update fitness based on cov_weights
+            # For each individual, update fitness based on weights
             for ind in pop:
-                ind["fitness"] *= self._coverage_factor(cov_weights, ind["subgroup"])
+                ind.weighted_score = (
+                    ind.fitness.values[0]
+                    * self._coverage_factor(weights, ind.subgroup)
+                )
 
             # Get best individual
-            best = max(pop, key=lambda ind: ind["fitness"])
-            top_k.append(best)
+            best = max(pop, key=lambda ind: ind.weighted_score)
+            new_top_k.append(best)
         
-        self.top_k = top_k
+        self.top_k = new_top_k
 
     def fit(self, X, y):
         """Extract shapelets from the provided timeseries and labels.
@@ -426,7 +436,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         pop = toolbox.population(n=self.population_size)
         fitnesses = list(map(toolbox.evaluate, pop))
         for ind, fit in zip(pop, fitnesses):
-            ind.fitness.values = fit
+            ind.fitness.values = fit["value"]
+            ind.subgroup = fit["subgroup"]
 
         # Keep track of the best iteration, in order to do stop after `wait`
         # generations without improvement
@@ -477,17 +488,19 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
             fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
             for ind, fit in zip(invalid_ind, fitnesses):
-                ind.fitness.values = fit
+                ind.fitness.values = fit["value"]
+                ind.subgroup = fit["subgroup"]
 
             # Replace population and update hall of fame, statistics & history
             new_pop = toolbox.select(offspring, self.population_size - 1)
-            fittest_ind = tools.selBest(pop + offspring, 1)
-            pop[:] = new_pop + fittest_ind
+            # fittest_inds = tools.selBest(pop + offspring, 1)
+            fittest_inds = max(
+                pop + offspring, 
+                key=lambda ind: ind.fitness.values[0]
+            )
+            pop[:] = new_pop + [fittest_inds]            
             it_stats = stats.compile(pop)
             self.history.append([it, it_stats])
-
-            # Update bag of best individuals
-            self._update_top_k(pop)
 
             # Print our statistics
             if self.verbose:
@@ -500,10 +513,14 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                     it=it,
                     new_ind=best_ind,
                 )
+
+            # Update bag of best individuals
+            if not isinf(self.best['score']):
+                self._update_top_k(pop)
             it += 1
 
         self.pop = pop
-        if apply_differencing:
+        if self.apply_differencing:
             self.best["shaps_undiffed"] = [self.rebuild_diffed(x) for x in self.best["shapelets"]]
             
         self.is_fitted = True

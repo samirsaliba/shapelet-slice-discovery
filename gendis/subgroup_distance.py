@@ -74,10 +74,10 @@ class SubgroupDistance:
         sg_mean = np.mean(subgroup_y)
         return {
             'value': np.array([fitness]),
+            'subgroup': subgroup,
             'info': {
                 'fitness': fitness,
                 'dist': dist,
-                'subgroup': subgroup,
                 'subgroup_size_weight': sizeW,
                 'subgroup_error_mean': sg_mean,
                 'population_mean': np.mean(y),
