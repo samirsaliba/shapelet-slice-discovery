@@ -331,7 +331,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         best = max(pop_star, key=lambda ind: ind.fitness.values[0])
         new_top_k = [best]
 
-        for _ in range(self.k):
+        for _ in range(self.k - 1):
             # Update coverage and coverage_weights
             weights, coverage = self._update_coverage(
                 best.subgroup, coverage
@@ -349,6 +349,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             best = max(pop, key=lambda ind: ind.weighted_score)
             new_top_k.append(best)
         
+        self.top_k_coverage = coverage
         self.top_k = new_top_k
 
     def fit(self, X, y):
@@ -479,10 +480,23 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
             # Apply mutation to each individual
             for idx, indiv in enumerate(offspring):
-                for mut_op in deap_mut_ops:
-                    if np.random.random() < self.mutation_prob:
-                        mut_op(indiv, toolbox)
-                        del indiv.fitness.values
+                ind_fitness = (
+                    indiv.fitness.values[0] 
+                    if indiv.fitness.valid
+                    else -np.inf
+                )
+
+                if isinf(ind_fitness):
+                    # If fitness is inf, adding another shapelet won't help
+                    # Only helps remove or replacing
+                    remove_shapelet(indiv, toolbox)
+                    del indiv.fitness.values
+
+                else:
+                    for mut_op in deap_mut_ops:
+                        if np.random.random() < self.mutation_prob:
+                            mut_op(indiv, toolbox)
+                            del indiv.fitness.values
 
             # Update the fitness values
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
@@ -490,6 +504,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             for ind, fit in zip(invalid_ind, fitnesses):
                 ind.fitness.values = fit["value"]
                 ind.subgroup = fit["subgroup"]
+                ind.info = fit["info"]
 
             # Replace population and update hall of fame, statistics & history
             new_pop = toolbox.select(offspring, self.population_size - 1)
@@ -527,7 +542,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         del self.X, self.y
 
 
-    def transform(self, X, shapelets=None, return_positions=False, standardize=False):
+    def transform(self, X, y, shapelets=None, return_positions=False, standardize=False):
         """After fitting the Extractor, we can transform collections of 
         timeseries in matrices with distances to each of the shapelets in
         the evolved shapelet set.
@@ -558,6 +573,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             return_positions=return_positions,
             cache=None
         )
+        subgroup = self.fitness.filter_subgroup_shapelets(D, y)
 
         if standardize:
             scaler = StandardScaler()
@@ -567,8 +583,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         if return_positions:
             data = np.hstack((D, L))
             cols += [f'L_{i}' for i in range(L.shape[1])]
-        else:
-            data, cols = D, None
+
+        data = np.hstack((data, subgroup.reshape(-1, 1)))
+        cols.append('in_subgroup')
             
         return pd.DataFrame(data=data, columns=cols, index=index)
 
