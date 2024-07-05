@@ -26,9 +26,13 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.utils.validation import check_is_fitted
 
 try:
-    from shapelets_distances import calculate_shapelet_dist_matrix, dtw
+    from shapelets_distances import (
+        calculate_shapelet_dist_matrix, dtw, _pdist_location, euclidean
+    )
 except:
-    from gendis.shapelets_distances import calculate_shapelet_dist_matrix, dtw
+    from gendis.shapelets_distances import (
+        calculate_shapelet_dist_matrix, dtw, _pdist_location, euclidean
+    )
 
 
 # Custom genetic operators
@@ -206,7 +210,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.top_k = None
 
         self.apply_differencing = True
-        self.dist_function = dtw
+        # self.dist_function = dtw, euclidean, _pdist_location
+        self.dist_function = euclidean
 
     def _set_fitness_function(self, fitness):
         assert fitness is not None, "Please include a fitness function via fitness parameter.\
@@ -300,8 +305,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
     def _early_stopping_check(self, it):
         return (
-            not isinf(self.best["score"]) # If score is inf don't stop
-            and it - self.best["it"] > self.wait
+            it - self.last_top_k_change > self.wait
         )
 
     def _update_coverage(self, subgroup, coverage):
@@ -319,16 +323,30 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         sg_weights_total = subgroup.sum() * self.coverage_alpha
         return in_sg_weights / sg_weights_total
 
-    def _update_top_k(self, pop):
+    def _format_ind_topk(self):
+        format_ind_lambda = lambda ind: {
+            "shaps": [shap.flatten() for shap in ind],
+            "info": ind.info,
+            "subgroup": ind.subgroup,
+            "coverage_weight": ind.coverage_weight
+        }
+        self.top_k  = [format_ind_lambda(x) for x in self.top_k ]
+
+    def _update_top_k(self, pop, it):
         coverage = np.ones(len(self.X))
         weights = np.power([self.coverage_alpha], coverage)
 
         if self.top_k is None:
             pop_star = pop
         else:
-            pop_star = self.top_k + pop 
+            pop_star = self.top_k + pop
 
-        best = max(pop_star, key=lambda ind: ind.fitness.values[0])
+        best = copy.deepcopy(
+            max(pop_star, key=lambda ind: ind.fitness.values[0])
+        )
+        best.coverage_weight = 1.0
+        top_k_change = (not getattr(best, 'in_top_k', False))
+        best.in_top_k = True
         new_top_k = [best]
 
         for _ in range(self.k - 1):
@@ -337,18 +355,29 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                 best.subgroup, coverage
             )
             
-            # Now update fitnesses again
+            # Calculate weighted scores
             # For each individual, update fitness based on weights
+            fitness_values = []
+            coverage_factors = []
             for ind in pop:
-                ind.weighted_score = (
-                    ind.fitness.values[0]
-                    * self._coverage_factor(weights, ind.subgroup)
-                )
+                ind_cov_weight = self._coverage_factor(weights, ind.subgroup)
+                ind.coverage_weight = ind_cov_weight
+                fitness_values.append(ind.fitness.values[0])
+                coverage_factors.append(ind_cov_weight)
 
-            # Get best individual
-            best = max(pop, key=lambda ind: ind.weighted_score)
+            fitness_values = np.array(fitness_values)
+            coverage_factors = np.array(coverage_factors)
+            weighted_scores = fitness_values * coverage_factors
+
+            # Get the individual with maximum weighted score
+            max_index = np.argmax(weighted_scores)
+            best = copy.deepcopy(pop[max_index])
+            top_k_change = (top_k_change or (not getattr(best, 'in_top_k', False)))
+            best.in_top_k = True
             new_top_k.append(best)
-        
+
+        if top_k_change:
+            self.last_top_k_change = it
         self.top_k_coverage = coverage
         self.top_k = new_top_k
 
@@ -421,7 +450,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         toolbox.register("evaluate", self._eval_individual)
         # Small tournaments to ensure diversity
-        toolbox.register("select", tools.selTournament, tournsize=3)
+        toolbox.register("select", tools.selTournament, tournsize=2)
 
         # Set up the statistics. We will measure the mean, std dev and max
         stats = tools.Statistics(key=lambda ind: ind.fitness.values[0])
@@ -437,8 +466,14 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         pop = toolbox.population(n=self.population_size)
         fitnesses = list(map(toolbox.evaluate, pop))
         for ind, fit in zip(pop, fitnesses):
+
+            while not fit["valid"]:
+                remove_shapelet(ind, toolbox, remove_last=True)
+                fit = toolbox.evaluate(ind)
+
             ind.fitness.values = fit["value"]
             ind.subgroup = fit["subgroup"]
+            ind.info = fit["info"]
 
         # Keep track of the best iteration, in order to do stop after `wait`
         # generations without improvement
@@ -449,6 +484,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             'info': None,
             'shapelets': []
         }
+        self.last_top_k_change = 0
 
         # Set up a matplotlib figure and set the axes
         height = int(np.ceil(self.population_size/4))
@@ -486,22 +522,21 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                     else -np.inf
                 )
 
-                if isinf(ind_fitness):
-                    # If fitness is inf, adding another shapelet won't help
-                    # Only helps remove or replacing
-                    remove_shapelet(indiv, toolbox)
-                    del indiv.fitness.values
-
-                else:
-                    for mut_op in deap_mut_ops:
-                        if np.random.random() < self.mutation_prob:
-                            mut_op(indiv, toolbox)
-                            del indiv.fitness.values
+                for mut_op in deap_mut_ops:
+                    if np.random.random() < self.mutation_prob:
+                        mut_op(indiv, toolbox)
+                        del indiv.fitness.values
 
             # Update the fitness values
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
             fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
             for ind, fit in zip(invalid_ind, fitnesses):
+
+                # Search for shapelet until individual is valid
+                while not fit["valid"]:
+                    remove_shapelet(ind, toolbox, remove_last=True)
+                    fit = toolbox.evaluate(ind)
+                
                 ind.fitness.values = fit["value"]
                 ind.subgroup = fit["subgroup"]
                 ind.info = fit["info"]
@@ -530,14 +565,14 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                 )
 
             # Update bag of best individuals
-            if not isinf(self.best['score']):
-                self._update_top_k(pop)
+            self._update_top_k(pop, it)
             it += 1
 
         self.pop = pop
         if self.apply_differencing:
             self.best["shaps_undiffed"] = [self.rebuild_diffed(x) for x in self.best["shapelets"]]
-            
+        
+        self._format_ind_topk()
         self.is_fitted = True
         del self.X, self.y
 

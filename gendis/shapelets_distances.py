@@ -16,7 +16,7 @@ def calculate_shapelet_dist_matrix(
     ):
     """Calculate the distance matrix for a set of shapelets"""
     D = -1 * np.ones((len(X), len(shapelets)))
-    L = None
+    L = -1 * np.ones((len(X), len(shapelets)))
 
     # First check if we already calculated distances for a shapelet
     if cache is not None:
@@ -24,25 +24,28 @@ def calculate_shapelet_dist_matrix(
             shap_hash = hash(tuple(shap.flatten()))
             cache_val = cache.get(shap_hash)
             if cache_val is not None:
-                D[:, shap_ix] = cache_val
+                d, l = cache_val
+                D[:, shap_ix] = d
+                L[:, shap_ix] = l
 
     # Fill up the 0 entries
-    res = dist_function(X, [shap.flatten() for shap in shapelets], D)
-    D = res[:,0,:]
+    res = dist_function(X, [shap.flatten() for shap in shapelets], D, L)
 
-    if return_positions:
-        L = res[:,1,:]
+    if res is not None:
+        D = res[:,0,:]
+        if return_positions:
+            L = res[:,1,:]
 
     # Fill up our cache
     if cache is not None:
         for shap_ix, shap in enumerate(shapelets):
             shap_hash = hash(tuple(shap.flatten()))
-            cache.set(shap_hash, D[:, shap_ix])
+            cache.set(shap_hash, (D[:, shap_ix], L[:, shap_ix]))
 
     return D, L
 
 def _row_dist_sliding_helper(x, shaps, dist_fn):
-    step = 3
+    step = 1
     shap_dists = []
     shap_positions = []
     for shap in shaps:
@@ -64,10 +67,10 @@ def _distance_wrapper(timeseries_matrix, shaps, distances, dist_fn):
     return np.apply_along_axis(apply_fn, 1, timeseries_matrix)
 
 
-def dtw(timeseries_matrix, shaps, distances):
+def dtw(timeseries_matrix, shaps, distances, positions):
     return _distance_wrapper(
         timeseries_matrix, shaps, distances, _dtw.distance_fast)
 
-def euclidean(timeseries_matrix, shaps, distances):
+def euclidean(timeseries_matrix, shaps, distances, positions):
     return _distance_wrapper(
         timeseries_matrix, shaps, distances, ed_cc.distance)

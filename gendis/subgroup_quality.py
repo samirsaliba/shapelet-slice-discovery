@@ -2,12 +2,12 @@ import numpy as np
 from scipy.stats import wasserstein_distance, mannwhitneyu
 from sklearn.preprocessing import StandardScaler
 
-class SubgroupDistance:
+class SubgroupQuality:
     """
     Parameters
     ----------
     distance_function : callable
-        The distance function to use
+        The distribution distance function to use
     shapelet_dist_threshold : float
         The threshold for the distance matrix
     """
@@ -16,7 +16,7 @@ class SubgroupDistance:
         self,
         distance_function, 
         shapelet_dist_threshold, 
-        sg_size_beta=2,
+        sg_size_beta,
         standardize=False
     ):
         self.sg_size_beta = sg_size_beta
@@ -25,7 +25,7 @@ class SubgroupDistance:
         self.standardize = standardize
 
     def __call__(self, D, y, shaps=None):
-        return self.distance(D, y)
+        return self.evaluate(D, y)
 
     def subgroup_size_factor(self, subgroup_n, y_n):
         """Score that favors larger subgroups"""
@@ -56,28 +56,23 @@ class SubgroupDistance:
         return np.all(_D <= self.shapelet_dist_threshold, axis=1)
 
 
-    def distance(self, D, y):
+    def evaluate(self, D, y):
         subgroup = self.filter_subgroup_shapelets(D, y)
         subgroup_y = y[subgroup]
-        subgroup_n = sum(subgroup)
+        subgroup_n = np.sum(subgroup)
 
-        if subgroup_n < 10:
-            fitness = -np.inf
-            sizeW = None
-            dist = None
-
-        else:
-            dist = self.distance_function(subgroup_y, y)
-            sizeW = self.subgroup_size_factor(subgroup_n, len(y))
-            fitness =  dist * sizeW
+        distribution_delta = self.distance_function(subgroup_y, y)
+        sizeW = self.subgroup_size_factor(subgroup_n, len(y))
+        fitness =  distribution_delta * sizeW
 
         sg_mean = np.mean(subgroup_y)
         return {
+            'valid': subgroup_n>0,
             'value': np.array([fitness]),
             'subgroup': subgroup,
             'info': {
                 'fitness': fitness,
-                'dist': dist,
+                'distribution_delta': distribution_delta,
                 'subgroup_size_weight': sizeW,
                 'subgroup_error_mean': sg_mean,
                 'population_mean': np.mean(y),

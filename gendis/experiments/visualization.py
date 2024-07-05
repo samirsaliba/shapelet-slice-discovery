@@ -50,7 +50,7 @@ def test_subgroup_separation(df, X, y, subgroups, shap):
 
     return _X
 
-def plot_k_series_with_shaps(X, k, shap, ascending=True, X_ordered=False):
+def plot_k_series_with_shaps(X, k, shap, plot_cols, ascending=True, X_ordered=False):
     _X = X.copy(deep=True)
     
     # Plot setup
@@ -69,7 +69,7 @@ def plot_k_series_with_shaps(X, k, shap, ascending=True, X_ordered=False):
     
     for i in range(k):
         data = _X.iloc[i]
-        ts = data.iloc[0:150]
+        ts = data[plot_cols]
         
         # Plot timeseries
         axs[i].plot(ts)
