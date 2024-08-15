@@ -26,6 +26,11 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.utils.validation import check_is_fitted
 
 try:
+    from individual import ShapeletIndividual
+except:
+    from gendis.individual import ShapeletIndividual
+
+try:
     from shapelets_distances import (
         calculate_shapelet_dist_matrix, dtw, _pdist_location, euclidean
     )
@@ -341,11 +346,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         else:
             pop_star = self.top_k + pop
 
-        best = copy.deepcopy(
-            max(pop_star, key=lambda ind: ind.fitness.values[0])
-        )
+        best = max(pop_star, key=lambda ind: ind.fitness.values[0])
         best.coverage_weight = 1.0
-        top_k_change = (not getattr(best, 'in_top_k', False))
+        top_k_change = not best.in_top_k
         best.in_top_k = True
         new_top_k = [best]
 
@@ -371,15 +374,15 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
             # Get the individual with maximum weighted score
             max_index = np.argmax(weighted_scores)
-            best = copy.deepcopy(pop[max_index])
-            top_k_change = (top_k_change or (not getattr(best, 'in_top_k', False)))
+            best = pop[max_index]
+            top_k_change = (top_k_change or not best.in_top_k)
             best.in_top_k = True
             new_top_k.append(best)
 
         if top_k_change:
             self.last_top_k_change = it
         self.top_k_coverage = coverage
-        self.top_k = new_top_k
+        self.top_k = copy.deepcopy(new_top_k)
 
     def fit(self, X, y):
         """Extract shapelets from the provided timeseries and labels.
@@ -415,7 +418,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         creator.create("FitnessMax", base.Fitness, weights=[1.0])
 
         # Individual are lists (of shapelets (list))
-        creator.create("Individual", list, fitness=creator.FitnessMax)
+        creator.create("Individual", ShapeletIndividual, fitness=creator.FitnessMax)
 
         # Keep a history of the evolution
         self.history = []

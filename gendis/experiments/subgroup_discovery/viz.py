@@ -1,13 +1,14 @@
 import matplotlib.pyplot as plt
+import numpy as np
 
-def plot_error_distributions(df, img_path):
+def plot_error_distributions(df, path):
     for lb in df['label'].value_counts().index:
         plt.hist(df.loc[df['label']==lb, 'error'], alpha=0.5, label=lb)
     plt.legend(loc='upper right')
     img_file = f'{path}/error_dist.png'
     plt.savefig(img_file)
 
-def plot_best_matching_shaps(gendis, individual, X_input, y):
+def plot_best_matching_shaps(gendis, individual, X_input, y, path, plot_i):
     X_input = X_input.copy()
     y = y.copy()
     
@@ -16,6 +17,8 @@ def plot_best_matching_shaps(gendis, individual, X_input, y):
     distances = gendis.transform(X_input, y, shapelets=shaps, return_positions=True)
     in_sg_mask = distances["in_subgroup"]==1
     
+    if sum(in_sg_mask)==0: return
+
     # Filter datasets based on subgroup mask
     distances = distances[in_sg_mask]
     X_input = X_input[in_sg_mask]
@@ -44,6 +47,9 @@ def plot_best_matching_shaps(gendis, individual, X_input, y):
     
     for i in range(k):
         # Plot timeseries
+        if i >= len(X_input):
+            break
+
         timeseries = X_input[i]
         axs[i].plot(timeseries, alpha=0.4)
         
@@ -55,8 +61,8 @@ def plot_best_matching_shaps(gendis, individual, X_input, y):
             
     plt.xticks(np.arange(0, len(timeseries)+1, 30.0))
     plt.tight_layout()
-    if show:
-        plt.show()
+    if False:
+        plt.show() # For future reference
     else:
         img_file = f'{path}/shapelets_matching_plots_top_{plot_i}.png'
         plt.savefig(img_file)
