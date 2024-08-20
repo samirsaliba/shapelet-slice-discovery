@@ -4,6 +4,7 @@ import json
 import logging
 import numpy as np
 import pathlib
+import sys
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Process some input file.')
@@ -19,6 +20,8 @@ def setup_logging(path, timestamp):
         format='%(asctime)s - %(levelname)s - %(message)s',
         level=logging.INFO
     )
+
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 
 

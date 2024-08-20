@@ -39,6 +39,7 @@ except:
         calculate_shapelet_dist_matrix, dtw, _pdist_location, euclidean
     )
 
+import logging
 
 # Custom genetic operators
 # try:
@@ -238,15 +239,15 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         return _X, y
 
-    def _print_statistics(self, it, stats, start):
-        if it == 1:
+    def _print_statistics(self, stats, start):
+        if self.it == 1:
             # Print the header of the statistics
             print('it\t\tavg\t\tstd\t\tmax\t\ttime')
             #print('it\t\tavg\t\tmax\t\ttime')
 
         print('{}\t\t{}\t\t{}\t\t{}\t{}'.format(
         # print('{}\t\t{}\t\t{}\t{}'.format(
-            it,
+            self.it,
             np.around(stats['avg'], 4),
             np.around(stats['std'], 3),
             np.around(stats['max'], 6),
@@ -298,6 +299,21 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             # if return_info: return fit
             # return fit["value"]
 
+    def _mutate_individual(self, ind, toolbox):
+        """Mutate an individual"""
+        if np.random.random() < self.mutation_prob:
+            mut_op = np.random.choice(self.mut_ops)
+            mut_op(ind, toolbox)
+            ind.reset()
+
+    def _cross_individuals(self, ind1, ind2):
+        """Cross two individuals"""
+        if np.random.random() < self.crossover_prob:
+            cx_op = np.random.choice(self.deap_cx_ops)
+            cx_op(ind1, ind2)
+            ind1.reset()
+            ind2.reset()
+
     def _safe_std(*args, **kwargs):
         try:
             return np.std(*args, **kwargs)
@@ -308,9 +324,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
     def rebuild_diffed(series):
         return np.insert(series.cumsum(), 0, 0)
 
-    def _early_stopping_check(self, it):
+    def _early_stopping_check(self):
         return (
-            it - self.last_top_k_change > self.wait
+            self.it - self.last_top_k_change > self.wait
         )
 
     def _update_coverage(self, subgroup, coverage):
@@ -343,13 +359,14 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         if self.top_k is None:
             pop_star = pop
+            self.top_k_ids = []
         else:
             pop_star = self.top_k + pop
 
         best = max(pop_star, key=lambda ind: ind.fitness.values[0])
         best.coverage_weight = 1.0
-        top_k_change = not best.in_top_k
-        best.in_top_k = True
+        # top_k_change = not best.in_top_k
+        # best.in_top_k = True
         new_top_k = [best]
 
         for _ in range(self.k - 1):
@@ -375,14 +392,19 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             # Get the individual with maximum weighted score
             max_index = np.argmax(weighted_scores)
             best = pop[max_index]
-            top_k_change = (top_k_change or not best.in_top_k)
-            best.in_top_k = True
+            # top_k_change = (top_k_change or not best.in_top_k)
+            # best.in_top_k = True
             new_top_k.append(best)
 
-        if top_k_change:
+            
+        new_top_k_ids = [ind.uuid for ind in new_top_k]
+        logging.info(f"Top-K ids: {new_top_k_ids}")
+        if set(self.top_k_ids) != set(new_top_k_ids):
             self.last_top_k_change = it
+
         self.top_k_coverage = coverage
         self.top_k = copy.deepcopy(new_top_k)
+        self.top_k_ids = new_top_k_ids
 
     def fit(self, X, y):
         """Extract shapelets from the provided timeseries and labels.
@@ -437,14 +459,15 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         # Register all our operations to the DEAP toolbox
         # toolbox.register("merge", merge_crossover)
-        deap_cx_ops = []
+        self.deap_cx_ops = []
         for i, cx_op in enumerate(self.cx_ops):
             toolbox.register(f"cx{i}", cx_op)
-            deap_cx_ops.append(getattr(toolbox, (f"cx{i}")))
-        deap_mut_ops = []
+            self.deap_cx_ops.append(getattr(toolbox, (f"cx{i}")))
+        
+        self.deap_mut_ops = []
         for i, mut_op in enumerate(self.mut_ops):
             toolbox.register(f"mutate{i}", mut_op)
-            deap_mut_ops.append(getattr(toolbox, (f"mutate{i}")))
+            self.deap_mut_ops.append(getattr(toolbox, (f"mutate{i}")))
 
         toolbox.register("create", self._create_individual)
         toolbox.register(
@@ -480,9 +503,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         # Keep track of the best iteration, in order to do stop after `wait`
         # generations without improvement
-        it = 1
+        self.it = 1
         self.best = {
-            'it': it,
+            'it': self.it,
             'score': float('-inf'),
             'info': None,
             'shapelets': []
@@ -499,10 +522,10 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                 plt.xlim([0, len(self.X[0])])
 
         # The genetic algorithm starts here
-        while it <= self.iterations:
+        while self.it <= self.iterations:
 
             # Early stopping
-            if self._early_stopping_check(it): break
+            if self._early_stopping_check(): break
 
             gen_start = time.time()
 
@@ -511,25 +534,19 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
             # Iterate over all individuals and apply CX with certain prob
             for child1, child2 in zip(offspring[::2], offspring[1::2]):
-                for cx_op in deap_cx_ops:
-                    if np.random.random() < self.crossover_prob:
-                        cx_op(child1, child2)
-                        del child1.fitness.values
-                        del child2.fitness.values
+                self._cross_individuals(child1, child2)
+                # for cx_op in deap_cx_ops:
+                #     if np.random.random() < self.crossover_prob:
+                #         cx_op(child1, child2)
+                #         child1.reset()
+                #         child2.reset()
+                #         # del child1.fitness.values
+                #         # del child2.fitness.values
 
-            # Apply mutation to each individual
-            for idx, indiv in enumerate(offspring):
-                ind_fitness = (
-                    indiv.fitness.values[0] 
-                    if indiv.fitness.valid
-                    else -np.inf
-                )
-
-                for mut_op in deap_mut_ops:
-                    if np.random.random() < self.mutation_prob:
-                        mut_op(indiv, toolbox)
-                        del indiv.fitness.values
-
+            # Apply mutation to each individual with a certain probability
+            for indiv in offspring:
+                self._mutate_individual(indiv, toolbox)
+            
             # Update the fitness values
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
             fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
@@ -538,6 +555,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                 # Search for shapelet until individual is valid
                 while not fit["valid"]:
                     remove_shapelet(ind, toolbox, remove_last=True)
+                    ind.pop_uuid()
                     fit = toolbox.evaluate(ind)
                 
                 ind.fitness.values = fit["value"]
@@ -553,23 +571,23 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             )
             pop[:] = new_pop + [fittest_inds]            
             it_stats = stats.compile(pop)
-            self.history.append([it, it_stats])
+            self.history.append([self.it, it_stats])
 
             # Print our statistics
             if self.verbose:
-                self._print_statistics(it=it, stats=it_stats, start=gen_start)
+                self._print_statistics(stats=it_stats, start=gen_start)
 
             # Have we found a new best score?
             if it_stats['max'] > self.best['score']:
                 best_ind = tools.selBest(pop + offspring, 1)[0]
                 self._update_best_individual(
-                    it=it,
+                    it=self.it,
                     new_ind=best_ind,
                 )
 
             # Update bag of best individuals
-            self._update_top_k(pop, it)
-            it += 1
+            self._update_top_k(pop, self.it)
+            self.it += 1
 
         self.pop = pop
         if self.apply_differencing:

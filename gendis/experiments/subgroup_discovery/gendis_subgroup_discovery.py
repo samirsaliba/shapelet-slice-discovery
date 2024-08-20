@@ -1,22 +1,14 @@
-import copy
 from datetime import datetime
 import logging
-import matplotlib.pyplot as plt
 import multiprocessing
-import numpy as np
 import os
 import pandas as pd
-import seaborn as sns
-from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.model_selection import ShuffleSplit
-import sys
-from tqdm import tqdm
 
 from gendis.operators import (
     add_shapelet, 
     remove_shapelet,
     replace_shapelet,
-    smooth_shapelet
 )
 from gendis.operators import (
     crossover_AND,
@@ -39,7 +31,7 @@ setup_logging(results_folder, timestamp)
 
 
 logging.info('[INFO] Script started')
-logging.debug(f'[INFO] Received input file path: {input_file_path}')
+logging.info(f'[INFO] Received input file path: {input_file_path}')
 
 # Reading, splitting data
 
@@ -82,7 +74,7 @@ logging.info({
 
 
 mut_ops= [add_shapelet, remove_shapelet, replace_shapelet]
-cx_ops = [crossover_uniform]
+cx_ops = [crossover_uniform, crossover_AND]
 
 subgroup_quality_func = SubgroupQuality(
     distance_function=SubgroupQuality.simple_mean, 
@@ -92,16 +84,16 @@ subgroup_quality_func = SubgroupQuality(
 )
 
 args = {
-    "k": 10,
+    "k": 3,
     "coverage_alpha": COVERAGE_ALPHA,
-    "population_size": 200, 
+    "population_size": 50, 
     "iterations": 100,  
     "mutation_prob": 0.3, 
     "crossover_prob": 0.3,
     "max_shaps": 3,
-    "wait": 20, 
+    "wait": 10, 
     "min_len": 20,
-    "max_len": 60,
+    "max_len": 40,
     "n_jobs": multiprocessing.cpu_count() - 3,
     "verbose": False,
     "dist_threshold": DIST_THRESHOLD,
@@ -125,6 +117,8 @@ gendis = GeneticExtractor(**args)
 gendis.fit(X_input, y_input)
 
 # Log results
+
+logging.info(f'[INFO] Finished training, it={gendis.it}')
 
 logging.info('[INFO] Results')
 logging.info('[INFO] Best individual stats')
