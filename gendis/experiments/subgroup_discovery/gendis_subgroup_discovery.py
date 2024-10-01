@@ -26,7 +26,7 @@ args = parse_args()
 input_file_path = args.input_file_path
 input_filename = os.path.splitext(os.path.basename(input_file_path))[0]
 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-results_folder = f"./{input_filename}_{timestamp}"
+results_folder = f"./results/{input_filename}_{timestamp}"
 setup_logging(results_folder, timestamp)
 
 
@@ -56,9 +56,9 @@ X_train, y_train = X.iloc[train_index], y.iloc[train_index]
 X_test, y_test = X.iloc[test_index], y.iloc[test_index]
 
 # Gendis initialization
-COVERAGE_ALPHA = 0.8
-SUBGROUP_SIZE_BETA = 0.5
-DIST_THRESHOLD = 10
+COVERAGE_ALPHA = 0.1
+SUBGROUP_SIZE_BETA = 1
+DIST_THRESHOLD = 5
 subgroup_args = {
     "coverage_alpha": COVERAGE_ALPHA,
     "subgroup_size_beta": SUBGROUP_SIZE_BETA,
@@ -73,8 +73,8 @@ logging.info({
 })
 
 
-mut_ops= [add_shapelet, remove_shapelet, replace_shapelet]
-cx_ops = [crossover_uniform, crossover_AND]
+mut_ops= [add_shapelet, replace_shapelet]
+cx_ops = [crossover_AND]
 
 subgroup_quality_func = SubgroupQuality(
     distance_function=SubgroupQuality.simple_mean, 
@@ -86,8 +86,8 @@ subgroup_quality_func = SubgroupQuality(
 args = {
     "k": 3,
     "coverage_alpha": COVERAGE_ALPHA,
-    "population_size": 50, 
-    "iterations": 100,  
+    "population_size": 200, 
+    "iterations": 50,  
     "mutation_prob": 0.3, 
     "crossover_prob": 0.3,
     "max_shaps": 3,

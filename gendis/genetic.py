@@ -357,9 +357,12 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         coverage = np.ones(len(self.X))
         weights = np.power([self.coverage_alpha], coverage)
 
+        pop = copy.deepcopy(pop)
+
         if self.top_k is None:
             pop_star = pop
             self.top_k_ids = []
+            self.top_k_coverage = np.array([])
         else:
             pop_star = self.top_k + pop
 
@@ -368,8 +371,10 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         # top_k_change = not best.in_top_k
         # best.in_top_k = True
         new_top_k = [best]
+        new_top_k_ids = set([best.uuid])
 
-        for _ in range(self.k - 1):
+        k = 0
+        while k < self.k:
             # Update coverage and coverage_weights
             weights, coverage = self._update_coverage(
                 best.subgroup, coverage
@@ -390,17 +395,31 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             weighted_scores = fitness_values * coverage_factors
 
             # Get the individual with maximum weighted score
-            max_index = np.argmax(weighted_scores)
-            best = pop[max_index]
-            # top_k_change = (top_k_change or not best.in_top_k)
-            # best.in_top_k = True
-            new_top_k.append(best)
+            found_new_best = False
+            while not found_new_best:
+                # This avoids duplicates individuals
+                max_index = np.argmax(weighted_scores)
+                best_weighted = weighted_scores[max_index]
+                best_cov = coverage_factors[max_index]
 
+                weighted_scores = np.delete(weighted_scores, max_index)
+                coverage_factors = np.delete(coverage_factors, max_index)
+                best = pop.pop(max_index)
+
+                found_new_best = best.uuid not in new_top_k_ids
+
+            new_top_k.append(best)
+            new_top_k_ids.add(best.uuid)
+            k+=1
             
-        new_top_k_ids = [ind.uuid for ind in new_top_k]
-        logging.info(f"Top-K ids: {new_top_k_ids}")
-        if set(self.top_k_ids) != set(new_top_k_ids):
+        logging.debug(f"Top-K ids: {new_top_k_ids}")
+
+        # Early stopping strategy based on coverage
+        if not np.array_equal(coverage, self.top_k_coverage):
             self.last_top_k_change = it
+
+        # if set(self.top_k_ids) != set(new_top_k_ids):
+        #     self.last_top_k_change = it
 
         self.top_k_coverage = coverage
         self.top_k = copy.deepcopy(new_top_k)
@@ -523,6 +542,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         # The genetic algorithm starts here
         while self.it <= self.iterations:
+            logging.info(f'[INFO] it:{self.it}') 
 
             # Early stopping
             if self._early_stopping_check(): break
