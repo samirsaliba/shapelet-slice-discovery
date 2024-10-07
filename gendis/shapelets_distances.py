@@ -17,12 +17,11 @@ def calculate_shapelet_dist_matrix(
     """Calculate the distance matrix for a set of shapelets"""
     D = -1 * np.ones((len(X), len(shapelets)))
     L = -1 * np.ones((len(X), len(shapelets)))
-
     # First check if we already calculated distances for a shapelet
     if cache is not None:
         for shap_ix, shap in enumerate(shapelets):
-            shap_hash = hash(tuple(shap.flatten()))
-            cache_val = cache.get(shap_hash)
+            # shap_hash = hash(tuple(shap.flatten()))
+            cache_val = cache.get(shap.id)
             if cache_val is not None:
                 d, l = cache_val
                 D[:, shap_ix] = d
@@ -39,8 +38,8 @@ def calculate_shapelet_dist_matrix(
     # Fill up our cache
     if cache is not None:
         for shap_ix, shap in enumerate(shapelets):
-            shap_hash = hash(tuple(shap.flatten()))
-            cache.set(shap_hash, (D[:, shap_ix], L[:, shap_ix]))
+            # shap_hash = hash(tuple(shap.flatten()))
+            cache.set(shap.id, (D[:, shap_ix], L[:, shap_ix]))
 
     return D, L
 

@@ -1,5 +1,4 @@
 # Standard lib
-from collections import OrderedDict
 import copy
 import array
 import time
@@ -41,62 +40,34 @@ except:
 
 import logging
 
-# Custom genetic operators
-# try:
-#     from initialization import random_shapelet, kmeans
-#     from crossover import crossover_AND, crossover_uniform
-#     from mutation import (
-#         add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
-#     )
-
-# except:
-#     from gendis.initialization import random_shapelet, kmeans
-#     from gendis.crossover import crossover_AND, crossover_uniform
-#     from gendis.mutation import (
-#         add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
-#     )
-
+# todo remove shapelet
 try:
     from operators import (
+        Shapelet,
+
         random_shapelet, kmeans,
         crossover_AND, crossover_uniform,
         add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
     )
+    from LRUCache import LRUCache
+
+    
 
 except:
     from gendis.operators import (
+        Shapelet,
+
         random_shapelet, kmeans,
         crossover_AND, crossover_uniform,
         add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
     )
+    from gendis.LRUCache import LRUCache
 
 from dtaidistance.preprocessing import differencing
 
 # Ignore warnings
 import warnings
 warnings.filterwarnings('ignore')
-
-
-class LRUCache:
-    def __init__(self, capacity):
-        self.capacity = capacity
-        self.cache = OrderedDict()
-
-    def get(self, key):
-        try:
-            value = self.cache.pop(key)
-            self.cache[key] = value
-            return value
-        except KeyError:
-            return None
-
-    def set(self, key, value):
-        try:
-            self.cache.pop(key)
-        except KeyError:
-            if len(self.cache) >= self.capacity:
-                self.cache.popitem(last=False)
-        self.cache[key] = value
 
 
 class GeneticExtractor(BaseEstimator, TransformerMixin):
@@ -273,10 +244,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
  
     def _create_individual(self, n_shapelets=None):
         """Generate a random shapelet set"""
-        # if n_shapelets is None:
-        #     n_shapelets = np.random.randint(1, self.max_shaps)
         n_shapelets = 1
-
         init_op = np.random.choice(self.init_ops)
         return init_op(
             X=self.X, 
@@ -288,12 +256,20 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
     def _eval_individual(self, shaps):
             """Evaluate the fitness of an individual"""
+            try:
+                self.assert_healthy_individual(shaps, "eval")
+            except:
+                print(type(shaps))
+                print(shaps)
+                exit(1)
+
             D, _ = calculate_shapelet_dist_matrix(
                 self.X, shaps, 
                 dist_function=self.dist_function, 
                 return_positions=False,
                 cache=self.cache
                 )
+
             return self.fitness(D=D, y=self.y, shaps=shaps)
 
             # if return_info: return fit
@@ -368,8 +344,6 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         best = max(pop_star, key=lambda ind: ind.fitness.values[0])
         best.coverage_weight = 1.0
-        # top_k_change = not best.in_top_k
-        # best.in_top_k = True
         new_top_k = [best]
         new_top_k_ids = set([best.uuid])
 
@@ -418,12 +392,20 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         if not np.array_equal(coverage, self.top_k_coverage):
             self.last_top_k_change = it
 
-        # if set(self.top_k_ids) != set(new_top_k_ids):
-        #     self.last_top_k_change = it
-
         self.top_k_coverage = coverage
         self.top_k = copy.deepcopy(new_top_k)
         self.top_k_ids = new_top_k_ids
+
+    def assert_healthy_individual(self, ind, msg):
+        for shap in ind:
+            try:
+                assert isinstance(shap, Shapelet), "Expected a Shapelet instance."
+                assert hasattr(shap, 'id'), f"Shapelet does not have an 'id' attribute."
+            except Exception as e:
+                print(msg)
+                print(ind)
+                time.sleep(1)
+                raise(e)
 
     def fit(self, X, y):
         """Extract shapelets from the provided timeseries and labels.
@@ -512,9 +494,11 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         fitnesses = list(map(toolbox.evaluate, pop))
         for ind, fit in zip(pop, fitnesses):
 
+            self.assert_healthy_individual(ind, "init")
             while not fit["valid"]:
                 remove_shapelet(ind, toolbox, remove_last=True)
                 fit = toolbox.evaluate(ind)
+                self.assert_healthy_individual(ind, "rmv")
 
             ind.fitness.values = fit["value"]
             ind.subgroup = fit["subgroup"]
@@ -551,27 +535,23 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
             # Clone the population into offspring
             offspring = list(map(toolbox.clone, pop))
+            
 
             # Iterate over all individuals and apply CX with certain prob
             for child1, child2 in zip(offspring[::2], offspring[1::2]):
                 self._cross_individuals(child1, child2)
-                # for cx_op in deap_cx_ops:
-                #     if np.random.random() < self.crossover_prob:
-                #         cx_op(child1, child2)
-                #         child1.reset()
-                #         child2.reset()
-                #         # del child1.fitness.values
-                #         # del child2.fitness.values
+                self.assert_healthy_individual(child1, "cx")
+                self.assert_healthy_individual(child2, "cx2")
 
             # Apply mutation to each individual with a certain probability
             for indiv in offspring:
                 self._mutate_individual(indiv, toolbox)
+                self.assert_healthy_individual(indiv, "mut")
             
             # Update the fitness values
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
             fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
             for ind, fit in zip(invalid_ind, fitnesses):
-
                 # Search for shapelet until individual is valid
                 while not fit["valid"]:
                     remove_shapelet(ind, toolbox, remove_last=True)
@@ -647,9 +627,10 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             X, shapelets, 
             dist_function=self.dist_function, 
             return_positions=return_positions,
-            cache=None
+            cache=self.cache
         )
-        subgroup = self.fitness.filter_subgroup_shapelets(D, y)
+
+        subgroup, thresholds = self.fitness.get_set_subgroup(shapelets, D, y)
 
         if standardize:
             scaler = StandardScaler()

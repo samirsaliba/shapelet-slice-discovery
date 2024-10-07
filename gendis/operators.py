@@ -13,19 +13,61 @@ from tslearn.clustering import TimeSeriesKMeans
 # OUTPUT: 
 #    - shapelets (np.array)
 
+import numpy as np
+import uuid
+
+class Shapelet(np.ndarray):
+    def __new__(cls, input_array):
+        obj = np.asarray(input_array).view(cls)
+        obj.id = str(uuid.uuid4())  # Assign a unique ID
+        return obj
+
+    def __array_finalize__(self, obj):
+        if obj is None: return
+        self.id = getattr(obj, 'id', None)
+
+    def reset_id(self):
+        """Resets the shapelet's ID to a new unique value"""
+        self.id = str(uuid.uuid4())
+
+    def __repr__(self):
+        return f"Shapelet(ID={self.id}, data={super().__repr__()})"
+
 def random_shapelet(X, n_shapelets, min_len_series, max_len, min_len=4):
-    """Extract a random subseries from the training set"""
-    shaps = []
+    """Extract random subseries from the training set"""
+    shapelets = []
     for _ in range(n_shapelets):
         rand_row = np.random.randint(X.shape[0])
         rand_length = np.random.randint(max(4, min_len), min(min_len_series, max_len))
         rand_col = np.random.randint(min_len_series - rand_length)
-        shaps.append(X[rand_row][rand_col:rand_col+rand_length])
-    # if n_shapelets > 1:
-    #     return np.array(shaps)
-    # else:
-    #     return np.array(shaps[0])
-    return np.array(shaps)
+        shapelet = Shapelet(X[rand_row][rand_col:rand_col+rand_length])
+        shapelets.append(shapelet)
+
+
+    for shap in shapelets:
+        try:
+            assert isinstance(shap, Shapelet), "RANDOM SHAPELET INIT: Expected a Shapelet instance."
+        except Exception as e:
+            print("RANDOM SHAPELET INIT")
+            print(shapelets)
+            time.sleep(1)
+            raise(e)
+
+    return shapelets
+
+# def random_shapelet(X, n_shapelets, min_len_series, max_len, min_len=4):
+#     """Extract a random subseries from the training set"""
+#     shaps = []
+#     for _ in range(n_shapelets):
+#         rand_row = np.random.randint(X.shape[0])
+#         rand_length = np.random.randint(max(4, min_len), min(min_len_series, max_len))
+#         rand_col = np.random.randint(min_len_series - rand_length)
+#         shaps.append(X[rand_row][rand_col:rand_col+rand_length])
+#     # if n_shapelets > 1:
+#     #     return np.array(shaps)
+#     # else:
+#     #     return np.array(shaps[0])
+#     return np.array(shaps)
 
 
 def kmeans(X, n_shapelets, min_len_series, max_len, n_draw=None, min_len=4):
@@ -67,13 +109,13 @@ def smooth_shapelet(shapelets, toolbox):
     shap_mva = np.convolve(shap, np.ones(window), 'valid') / window
     fill = np.full(shape=len(shap)-len(shap_mva), fill_value=shap_mva[-1])
     shap = np.concatenate([shap_mva, fill])
-    shapelets[rand_shapelet] = shap
+    shapelets[rand_shapelet] = Shapelet(shap)
     return shapelets,
 
 
 def add_shapelet(shapelets, toolbox):
-    """Add a shapelet to the individual"""
-    shapelets.append(toolbox.create(n_shapelets=1))
+    """Add a shapelet to the individual."""
+    shapelets = shapelets + toolbox.create(n_shapelets=1)
     return shapelets,
 
 
@@ -104,12 +146,13 @@ def replace_shapelet(shapelets, toolbox):
     Returns:
     shapelets (list of lists): The modified individual with one shapelet replaced
     """
+
     if len(shapelets) > 0:
         # Randomly select an index to remove
         remove_index = random.randint(0, len(shapelets) - 1)
         shapelets.pop(remove_index)
     
-    shapelets.append(toolbox.create(n_shapelets=1))
+    shapelets = shapelets + toolbox.create(n_shapelets=1)
     return shapelets,
 
 
@@ -121,8 +164,8 @@ def mask_shapelet(shapelets, toolbox):
     if len_shap > shap_min_n:
         rand_start = np.random.randint(len_shap - shap_min_n)
         rand_end = np.random.randint(rand_start + shap_min_n, len_shap)
-        shapelets[rand_shapelet] = shapelets[rand_shapelet][rand_start:rand_end]
-
+        shapelets[rand_shapelet] = Shapelet(shapelets[rand_shapelet][rand_start:rand_end])
+        
     return shapelets,
 
 
@@ -143,15 +186,16 @@ def crossover_AND(ind1, ind2):
     Perform crossover by creating a new individual from the union of two individuals' shapelets.
     
     Parameters:
-    ind1 (list of lists): First parent individual
-    ind2 (list of lists): Second parent individual
+    ind1 (list of Shapelet): First parent individual
+    ind2 (list of Shapelet): Second parent individual
     
     Returns:
-    new_ind1 (list of lists): New individual created from the union of ind1 and ind2
-    new_ind2 (list of lists): Duplicate of new_ind1 (for consistency with interface)
+    new_ind1 (list of Shapelet): New individual created from the union of ind1 and ind2
+    new_ind2 (list of Shapelet): Duplicate of new_ind1 (for consistency with interface)
     """
-    return ind2.extend(ind1), ind1
-
+    new_ind = ind1 + ind2
+    # Return new individuals, preserving their Shapelet class and attributes
+    return new_ind, ind1
 
 def crossover_uniform(ind1, ind2):
     """
@@ -165,6 +209,7 @@ def crossover_uniform(ind1, ind2):
     new_ind1 (list of lists): First new individual created by uniform crossover
     new_ind2 (list of lists): Second new individual created by uniform crossover
     """
+    print("CROSSOVER UNI")
     max_length = max(len(ind1), len(ind2))
     
     new_ind1 = []
@@ -192,4 +237,4 @@ def crossover_uniform(ind1, ind2):
             if shapelet1 is not None:
                 new_ind2.append(shapelet1)
     
-    return new_ind1, new_ind2
+    return Shapelet(new_ind1), Shapelet(new_ind2)
