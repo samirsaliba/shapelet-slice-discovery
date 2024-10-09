@@ -25,9 +25,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.utils.validation import check_is_fitted
 
 try:
-    from individual import ShapeletIndividual
+    from individual import Shapelet, ShapeletIndividual
 except:
-    from gendis.individual import ShapeletIndividual
+    from gendis.individual import Shapelet, ShapeletIndividual
 
 try:
     from shapelets_distances import (
@@ -43,8 +43,6 @@ import logging
 # todo remove shapelet
 try:
     from operators import (
-        Shapelet,
-
         random_shapelet, kmeans,
         crossover_AND, crossover_uniform,
         add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
@@ -55,8 +53,6 @@ try:
 
 except:
     from gendis.operators import (
-        Shapelet,
-
         random_shapelet, kmeans,
         crossover_AND, crossover_uniform,
         add_shapelet, remove_shapelet, replace_shapelet, smooth_shapelet
@@ -228,18 +224,11 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
     def _update_best_individual(self, it, new_ind):
         """Update the best individual if we found a better one"""
         ind_score = self._eval_individual(new_ind)
-
-        # Overwrite self.shapelets everytime so we can
-        # pre-emptively stop the genetic algorithm
-        best_shapelets = []
-        for shap in new_ind:
-            best_shapelets.append(shap.flatten())
-
         self.best = {
             'it': it,
             'score': ind_score['value'][0],
             'info': ind_score['info'],
-            'shapelets': best_shapelets
+            'shapelets': new_ind
         }
  
     def _create_individual(self, n_shapelets=None):
@@ -256,13 +245,6 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
     def _eval_individual(self, shaps):
             """Evaluate the fitness of an individual"""
-            try:
-                self.assert_healthy_individual(shaps, "eval")
-            except:
-                print(type(shaps))
-                print(shaps)
-                exit(1)
-
             D, _ = calculate_shapelet_dist_matrix(
                 self.X, shaps, 
                 dist_function=self.dist_function, 
@@ -298,7 +280,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
     @staticmethod
     def rebuild_diffed(series):
-        return np.insert(series.cumsum(), 0, 0)
+        return np.insert(np.cumsum(series), 0, 0)
 
     def _early_stopping_check(self):
         return (
@@ -321,19 +303,26 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         return in_sg_weights / sg_weights_total
 
     def _format_ind_topk(self):
-        format_ind_lambda = lambda ind: {
-            "shaps": [shap.flatten() for shap in ind],
-            "info": ind.info,
-            "subgroup": ind.subgroup,
-            "coverage_weight": ind.coverage_weight
-        }
-        self.top_k  = [format_ind_lambda(x) for x in self.top_k ]
+        top_k_formatted = []
+        for ind in self.top_k:
+            info = ind.info
+            info["coverage_weight"] = ind.coverage_weight
+            data = {
+                "shaps": ind,
+                "info": info,
+                "subgroup": ind.subgroup,
+                "coverage_weight": ind.coverage_weight,
+            }
+            top_k_formatted.append(data)
 
-    def _update_top_k(self, pop, it):
+        self.top_k  = top_k_formatted
+            
+    def _update_top_k(self, pop, it, tools):
+        print(f"[INFO] Updating TOP-K it{it}")
         coverage = np.ones(len(self.X))
         weights = np.power([self.coverage_alpha], coverage)
 
-        pop = copy.deepcopy(pop)
+        pop = list(map(ShapeletIndividual.clone, pop))
 
         if self.top_k is None:
             pop_star = pop
@@ -358,11 +347,10 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             # For each individual, update fitness based on weights
             fitness_values = []
             coverage_factors = []
-            for ind in pop:
-                ind_cov_weight = self._coverage_factor(weights, ind.subgroup)
-                ind.coverage_weight = ind_cov_weight
+            for ind in pop_star:
+                ind.coverage_weight = self._coverage_factor(weights, ind.subgroup)
                 fitness_values.append(ind.fitness.values[0])
-                coverage_factors.append(ind_cov_weight)
+                coverage_factors.append(ind.coverage_weight)
 
             fitness_values = np.array(fitness_values)
             coverage_factors = np.array(coverage_factors)
@@ -370,7 +358,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
             # Get the individual with maximum weighted score
             found_new_best = False
-            while not found_new_best:
+
+            while not found_new_best and pop_star:
                 # This avoids duplicates individuals
                 max_index = np.argmax(weighted_scores)
                 best_weighted = weighted_scores[max_index]
@@ -378,9 +367,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
                 weighted_scores = np.delete(weighted_scores, max_index)
                 coverage_factors = np.delete(coverage_factors, max_index)
-                best = pop.pop(max_index)
-
-                found_new_best = best.uuid not in new_top_k_ids
+                best = pop_star.pop(max_index)
+                found_new_best = (best.uuid not in new_top_k_ids)
 
             new_top_k.append(best)
             new_top_k_ids.add(best.uuid)
@@ -391,21 +379,34 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         # Early stopping strategy based on coverage
         if not np.array_equal(coverage, self.top_k_coverage):
             self.last_top_k_change = it
-
+        
         self.top_k_coverage = coverage
-        self.top_k = copy.deepcopy(new_top_k)
+        self.top_k = list(map(ShapeletIndividual.clone, new_top_k))
+
+        self._print_pop(self.top_k, tools)
         self.top_k_ids = new_top_k_ids
 
     def assert_healthy_individual(self, ind, msg):
         for shap in ind:
             try:
-                assert isinstance(shap, Shapelet), "Expected a Shapelet instance."
+                assert isinstance(shap, Shapelet), f"Expected a Shapelet instance [{msg}]."
                 assert hasattr(shap, 'id'), f"Shapelet does not have an 'id' attribute."
             except Exception as e:
-                print(msg)
                 print(ind)
-                time.sleep(1)
                 raise(e)
+
+    def _create_individual_manual(self, creator, X, row, start, end):
+        shapelet = Shapelet(X[row, start:end])
+        individual = ShapeletIndividual([shapelet])
+        ind = creator.Individual(individual)
+        print(ind.uuid)
+        return ind
+
+    def _print_pop(self, pop, tools):
+        best_pop = tools.selBest(pop, len(pop))
+        logging.info(f'[DEBUG] COMPILING RESULTS:{self.it}') 
+        for i in best_pop:
+            logging.info(f'[INFO] fitness={i.fitness.values},\ti={i.uuid}') 
 
     def fit(self, X, y):
         """Extract shapelets from the provided timeseries and labels.
@@ -448,6 +449,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         # Register all operations in the toolbox
         toolbox = base.Toolbox()
+        toolbox.register("clone", ShapeletIndividual.clone)
 
         if self.n_jobs == -1:
             self.n_jobs = multiprocessing.cpu_count()
@@ -493,17 +495,14 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         pop = toolbox.population(n=self.population_size)
         fitnesses = list(map(toolbox.evaluate, pop))
         for ind, fit in zip(pop, fitnesses):
-
-            self.assert_healthy_individual(ind, "init")
             while not fit["valid"]:
                 remove_shapelet(ind, toolbox, remove_last=True)
                 fit = toolbox.evaluate(ind)
-                self.assert_healthy_individual(ind, "rmv")
 
             ind.fitness.values = fit["value"]
             ind.subgroup = fit["subgroup"]
             ind.info = fit["info"]
-
+        
         # Keep track of the best iteration, in order to do stop after `wait`
         # generations without improvement
         self.it = 1
@@ -536,17 +535,13 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             # Clone the population into offspring
             offspring = list(map(toolbox.clone, pop))
             
-
             # Iterate over all individuals and apply CX with certain prob
             for child1, child2 in zip(offspring[::2], offspring[1::2]):
                 self._cross_individuals(child1, child2)
-                self.assert_healthy_individual(child1, "cx")
-                self.assert_healthy_individual(child2, "cx2")
 
             # Apply mutation to each individual with a certain probability
             for indiv in offspring:
                 self._mutate_individual(indiv, toolbox)
-                self.assert_healthy_individual(indiv, "mut")
             
             # Update the fitness values
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
@@ -586,8 +581,11 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                 )
 
             # Update bag of best individuals
-            self._update_top_k(pop, self.it)
+            self._update_top_k(pop, self.it, tools)
             self.it += 1
+
+            # self._print_pop(pop, tools)
+        
 
         self.pop = pop
         if self.apply_differencing:
@@ -627,7 +625,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             X, shapelets, 
             dist_function=self.dist_function, 
             return_positions=return_positions,
-            cache=self.cache
+            cache=None
         )
 
         subgroup, thresholds = self.fitness.get_set_subgroup(shapelets, D, y)

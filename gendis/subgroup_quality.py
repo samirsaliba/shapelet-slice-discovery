@@ -24,6 +24,7 @@ class SubgroupQuality:
         standardize=False,
         max_it = 100,
     ):  
+        self.alpha = 1.0
         self.cache = LRUCache(2048)
         self.sg_size_beta = sg_size_beta
         self.distance_function = distance_function
@@ -37,7 +38,7 @@ class SubgroupQuality:
         """Score that favors larger subgroups"""
         return (subgroup_n / y_n) ** self.sg_size_beta
 
-    def apply_sigmoid_filter(self, distances, threshold):
+    def get_threshold_filter(self, distances, threshold):
         """
         Parameters
         ----------
@@ -51,13 +52,8 @@ class SubgroupQuality:
         subgroup : array-like
             Boolean array indicating whether each instance i belongs to the subgroup,
             considering the distance to this specific shapelet.
-        """        
-        # Apply the sigmoid function to the distances
-        belonging_prob = 1 / (1 + np.exp(-(distances - threshold)))
-
-        # Return True if the sigmoid output is greater than or equal to 0.5 
-        # meaning within the subgroup
-        return belonging_prob > 0.5
+        """
+        return distances < threshold
 
     def compute_fitness_for_shapelet(self, dists, y, shapelet, threshold):
         """
@@ -80,13 +76,15 @@ class SubgroupQuality:
             The fitness value for the shapelet and threshold.
         """
         # Filter the subgroup using the threshold for this shapelet
-        subgroup = self.apply_sigmoid_filter(dists, threshold)
+        subgroup = self.get_threshold_filter(dists, threshold)
         subgroup_y = y[subgroup]
 
         # Compute the fitness (e.g., based on distribution delta and size factor)
         distribution_delta = self.distance_function(subgroup_y, y)
         sizeW = self.subgroup_size_factor(len(subgroup_y), len(y))
-        fitness = distribution_delta * sizeW
+        shap_distance_factor = np.median(dists[subgroup])
+
+        fitness = self.alpha * (distribution_delta * sizeW) - (1-self.alpha)*shap_distance_factor
 
         return fitness
 
@@ -109,50 +107,79 @@ class SubgroupQuality:
 
     def get_optimal_threshold_shapelet(self, shapelet, dists, y):
         """
-        Compute the optimal threshold for a given shapelet using gradient descent with momentum.
+        Compute the optimal threshold for a given shapelet using binary search.
         """
         cache_threshold = self.cache.get(shapelet.id)
         if cache_threshold is not None:
             return cache_threshold
 
-        # Start with percentiles as candidates for the initial threshold
-        percentiles = [10, 20, 30, 50, 70, 80, 90]
-        initial_thresholds = np.percentile(dists, percentiles)
-        fitness_values = [
-            self.compute_fitness_for_shapelet(dists, y, shapelet, t) 
-            for t in initial_thresholds
-        ]
+        # Start with percentiles as the initial range for the threshold
+        percentiles = [0, 100]
+        lower_bound, upper_bound = np.percentile(dists, percentiles)
+        
+        # Set initial best threshold to the middle of the range
+        search_best_threshold = (lower_bound + upper_bound) / 2
+        search_best_fitness = self.compute_fitness_for_shapelet(dists, y, shapelet, search_best_threshold)
+        global_best_threshold = search_best_threshold
+        global_best_fitness = search_best_fitness
+        
+        # Binary search parameters
+        max_iterations = self.max_it
+        tolerance = np.min(np.diff(np.sort(np.unique(dists))))  # Stop when the difference is smaller than this
+        stagnation_counter = 0
+        max_stagnation = 5  # Restart search after 5 non-improving iterations
+                
+        for iteration in range(max_iterations):
+            # Compute the mid-point between lower and upper bounds
+            mid_point = (lower_bound + upper_bound) / 2
+            
+            # Compute fitness for mid-point threshold
+            fitness_mid = self.compute_fitness_for_shapelet(dists, y, shapelet, mid_point)
+            
+            # Compare mid-point fitness with best so far
+            if fitness_mid > search_best_fitness:
+                search_best_threshold = mid_point
+                search_best_fitness = fitness_mid
+                stagnation_counter = 0  # Reset stagnation counter
 
-        # Choose the threshold with the best fitness value as the starting point
-        threshold = initial_thresholds[np.argmax(fitness_values)]
+                if search_best_fitness > global_best_fitness:
+                    global_best_fitness = search_best_fitness
+                    global_best_threshold = search_best_threshold
+            else:
+                stagnation_counter += 1
+            
+            # Adjust bounds based on comparison with best threshold
+            if mid_point < search_best_threshold:
+                lower_bound = mid_point
+            else:
+                upper_bound = mid_point
+            
+            # Check for convergence or stagnation
+            if upper_bound - lower_bound < tolerance or stagnation_counter >= max_stagnation:
+                # Optionally restart search with random perturbation
+                if stagnation_counter >= max_stagnation:                
+                    # Introduce a random jump within the current bounds
+                    random_jump = np.random.uniform(lower_bound, upper_bound)
+                    random_jump_fitness = self.compute_fitness_for_shapelet(dists, y, shapelet, random_jump)
+                    search_best_threshold = random_jump
+                    search_best_fitness = random_jump_fitness
+                    stagnation_counter = 0  # Reset stagnation counter after the jump
 
-        # Perform gradient descent to find the optimal threshold
-        learning_rate = 5 * np.min(np.diff(np.sort(np.unique(dists))))  # Larger initial rate
-        momentum = 0.9  # Momentum factor
-        velocity = 0  # Initial velocity for momentum
-        epsilon = np.min(np.diff(np.sort(np.unique(dists))))
+                    # Perturb the bounds slightly to explore a new region
+                    bound_perturb_factor = 0.1  # Modify as needed to control the scale of perturbation
+                    lower_bound = max(0, lower_bound + bound_perturb_factor * (upper_bound - lower_bound))
+                    upper_bound = min(1, upper_bound - bound_perturb_factor * (upper_bound - lower_bound))
 
-        for iteration in range(self.max_it):
-            # Compute the fitness and gradient for the current threshold
-            grad_threshold = self.compute_gradient_threshold(dists, y, shapelet, threshold, epsilon)
+                else:
+                    break
 
-            # Update the velocity with momentum
-            velocity = momentum * velocity - learning_rate * grad_threshold
-
-            # Update the threshold
-            threshold += velocity
-
-            # Optionally reduce learning rate if oscillation is detected
-            if np.sign(grad_threshold) != np.sign(velocity):
-                learning_rate *= 0.5
-
-        self.cache.set(shapelet.id, threshold)
-        return threshold
+        self.cache.set(shapelet.id, global_best_threshold)
+        shapelet.threshold = global_best_threshold
+        return global_best_threshold
 
     def get_shapelet_subgroup(self, shap, distances, y):
         threshold = self.get_optimal_threshold_shapelet(shap, distances, y)
-        shap.threshold = threshold
-        subgroup = self.apply_sigmoid_filter(distances, threshold)
+        subgroup = self.get_threshold_filter(distances, threshold)
 
         return threshold, subgroup
 
@@ -175,7 +202,7 @@ class SubgroupQuality:
 
         distribution_delta = self.distance_function(subgroup_y, y)
         sizeW = self.subgroup_size_factor(subgroup_n, len(y))
-        fitness =  alpha * (distribution_delta * sizeW) - (1-alpha)*sum_distances # TODO
+        fitness =  distribution_delta * sizeW
         sg_mean = np.mean(subgroup_y)
         return {
             'valid': subgroup_n>0,

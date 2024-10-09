@@ -45,7 +45,7 @@ logging.info(df.label.value_counts().to_dict())
 
 plot_error_distributions(df, results_folder)
 
-X = df.drop(columns=['error', 'label'])
+X = df.drop(columns=['pattern_x0', 'pattern_x1', 'pattern_y', 'error', 'label'])
 y = df['error']
 
 sss = ShuffleSplit(n_splits=1, test_size=0.1, random_state=0)
@@ -56,20 +56,17 @@ X_train, y_train = X.iloc[train_index], y.iloc[train_index]
 X_test, y_test = X.iloc[test_index], y.iloc[test_index]
 
 # Gendis initialization
-COVERAGE_ALPHA = 0.1
-SUBGROUP_SIZE_BETA = 1
-DIST_THRESHOLD = 5
+COVERAGE_ALPHA = 0.01
+SUBGROUP_SIZE_BETA = 0.5
 subgroup_args = {
     "coverage_alpha": COVERAGE_ALPHA,
     "subgroup_size_beta": SUBGROUP_SIZE_BETA,
-    "dist_threshold": DIST_THRESHOLD
 }
 
 logging.info('[INFO] Parameters SubgroupDistance')
 logging.info({
     'coverage_alpha': COVERAGE_ALPHA,
     'subgroup_size_beta': SUBGROUP_SIZE_BETA,
-    'shapelet_distance_threshold': DIST_THRESHOLD
 })
 
 
@@ -78,25 +75,24 @@ cx_ops = [crossover_AND]
 
 subgroup_quality_func = SubgroupQuality(
     distance_function=SubgroupQuality.simple_mean, 
-    shapelet_dist_threshold=DIST_THRESHOLD,
     sg_size_beta=SUBGROUP_SIZE_BETA,
-    standardize=False
+    standardize=False,
+    max_it=200
 )
 
 args = {
-    "k": 3,
+    "k": 5,
     "coverage_alpha": COVERAGE_ALPHA,
-    "population_size": 200, 
-    "iterations": 50,  
+    "population_size": 300, 
+    "iterations": 30,  
     "mutation_prob": 0.3, 
     "crossover_prob": 0.3,
     "max_shaps": 3,
-    "wait": 10, 
+    "wait": 15, 
     "min_len": 20,
     "max_len": 40,
     "n_jobs": multiprocessing.cpu_count() - 3,
-    "verbose": False,
-    "dist_threshold": DIST_THRESHOLD,
+    "verbose": False
 }
 funcs = {
     "fitness": subgroup_quality_func,

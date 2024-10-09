@@ -1,6 +1,11 @@
-# CSVs
+# Folders
+**/results/**
+**/data/**
+**/archive/**
+
+# files
 *.csv
-gendis/experiments/results/
+*.zip
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

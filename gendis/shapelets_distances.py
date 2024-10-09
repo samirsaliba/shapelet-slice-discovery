@@ -28,7 +28,7 @@ def calculate_shapelet_dist_matrix(
                 L[:, shap_ix] = l
 
     # Fill up the 0 entries
-    res = dist_function(X, [shap.flatten() for shap in shapelets], D, L)
+    res = dist_function(X, shapelets, D, L)
 
     if res is not None:
         D = res[:,0,:]
