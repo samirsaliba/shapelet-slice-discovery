@@ -24,7 +24,7 @@ class SubgroupQuality:
         standardize=False,
         max_it = 100,
     ):  
-        self.alpha = 1.0
+        self.alpha = 0.8
         self.cache = LRUCache(2048)
         self.sg_size_beta = sg_size_beta
         self.distance_function = distance_function
@@ -105,9 +105,10 @@ class SubgroupQuality:
 
         return grad_threshold
 
+
     def get_optimal_threshold_shapelet(self, shapelet, dists, y):
         """
-        Compute the optimal threshold for a given shapelet using binary search.
+        Compute the optimal threshold for a given shapelet using multiple runs of Simulated Annealing.
         """
         cache_threshold = self.cache.get(shapelet.id)
         if cache_threshold is not None:
@@ -116,66 +117,67 @@ class SubgroupQuality:
         # Start with percentiles as the initial range for the threshold
         percentiles = [0, 100]
         lower_bound, upper_bound = np.percentile(dists, percentiles)
-        
-        # Set initial best threshold to the middle of the range
-        search_best_threshold = (lower_bound + upper_bound) / 2
-        search_best_fitness = self.compute_fitness_for_shapelet(dists, y, shapelet, search_best_threshold)
-        global_best_threshold = search_best_threshold
-        global_best_fitness = search_best_fitness
-        
-        # Binary search parameters
-        max_iterations = self.max_it
-        tolerance = np.min(np.diff(np.sort(np.unique(dists))))  # Stop when the difference is smaller than this
-        stagnation_counter = 0
-        max_stagnation = 5  # Restart search after 5 non-improving iterations
+
+        # Simulated annealing parameters
+        num_restarts = 5 # Number of independent Simulated Annealing runs
+        max_iterations = self.max_it // num_restarts
+        initial_temperature = 1.0
+        min_temperature = 0.001  # Stopping criterion for the cooling process
+        cooling_rate = 0.95      # Cooling rate to decrease the temperature
                 
-        for iteration in range(max_iterations):
-            # Compute the mid-point between lower and upper bounds
-            mid_point = (lower_bound + upper_bound) / 2
-            
-            # Compute fitness for mid-point threshold
-            fitness_mid = self.compute_fitness_for_shapelet(dists, y, shapelet, mid_point)
-            
-            # Compare mid-point fitness with best so far
-            if fitness_mid > search_best_fitness:
-                search_best_threshold = mid_point
-                search_best_fitness = fitness_mid
-                stagnation_counter = 0  # Reset stagnation counter
+        global_best_threshold = None
+        global_best_fitness = -np.inf
 
-                if search_best_fitness > global_best_fitness:
-                    global_best_fitness = search_best_fitness
-                    global_best_threshold = search_best_threshold
-            else:
-                stagnation_counter += 1
-            
-            # Adjust bounds based on comparison with best threshold
-            if mid_point < search_best_threshold:
-                lower_bound = mid_point
-            else:
-                upper_bound = mid_point
-            
-            # Check for convergence or stagnation
-            if upper_bound - lower_bound < tolerance or stagnation_counter >= max_stagnation:
-                # Optionally restart search with random perturbation
-                if stagnation_counter >= max_stagnation:                
-                    # Introduce a random jump within the current bounds
-                    random_jump = np.random.uniform(lower_bound, upper_bound)
-                    random_jump_fitness = self.compute_fitness_for_shapelet(dists, y, shapelet, random_jump)
-                    search_best_threshold = random_jump
-                    search_best_fitness = random_jump_fitness
-                    stagnation_counter = 0  # Reset stagnation counter after the jump
+        # Multiple Simulated Annealing runs
+        for restart in range(num_restarts):
+            # Set the starting point for the current run (random point within the range)
+            current_threshold = np.random.uniform(lower_bound, upper_bound)
+            current_fitness = self.compute_fitness_for_shapelet(dists, y, shapelet, current_threshold)
+            best_threshold = current_threshold
+            best_fitness = current_fitness
 
-                    # Perturb the bounds slightly to explore a new region
-                    bound_perturb_factor = 0.1  # Modify as needed to control the scale of perturbation
-                    lower_bound = max(0, lower_bound + bound_perturb_factor * (upper_bound - lower_bound))
-                    upper_bound = min(1, upper_bound - bound_perturb_factor * (upper_bound - lower_bound))
+            temperature = initial_temperature
 
-                else:
+            # Single run of Simulated Annealing
+            for iteration in range(max_iterations):
+                if temperature < min_temperature:
                     break
 
+                # Randomly perturb the threshold within the bounds
+                new_threshold = np.random.uniform(lower_bound, upper_bound)
+                new_fitness = self.compute_fitness_for_shapelet(dists, y, shapelet, new_threshold)
+
+                # Determine if the new threshold should be accepted
+                fitness_difference = new_fitness - current_fitness
+                if fitness_difference > 0:
+                    # If the new solution is better, accept it
+                    current_threshold = new_threshold
+                    current_fitness = new_fitness
+                else:
+                    # If the new solution is worse, accept it with a probability depending on temperature
+                    acceptance_probability = np.exp(fitness_difference / temperature)
+                    if np.random.rand() < acceptance_probability:
+                        current_threshold = new_threshold
+                        current_fitness = new_fitness
+
+                # Track the best solution in the current run
+                if current_fitness > best_fitness:
+                    best_threshold = current_threshold
+                    best_fitness = current_fitness
+
+                # Reduce the temperature (cooling)
+                temperature *= cooling_rate
+
+            # Track the global best solution across all runs
+            if best_fitness > global_best_fitness:
+                global_best_threshold = best_threshold
+                global_best_fitness = best_fitness
+
+        # Cache the best solution across all restarts
         self.cache.set(shapelet.id, global_best_threshold)
         shapelet.threshold = global_best_threshold
         return global_best_threshold
+
 
     def get_shapelet_subgroup(self, shap, distances, y):
         threshold = self.get_optimal_threshold_shapelet(shap, distances, y)

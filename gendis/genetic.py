@@ -142,7 +142,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         mutation_prob, 
         crossover_prob,
         coverage_alpha=0.5,
-        wait=10, 
+        wait=10,
+        pop_restarts=5,
         plot=None, 
         max_shaps=None, 
         n_jobs=1, 
@@ -165,6 +166,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.coverage_alpha = coverage_alpha
         self.plot = plot
         self.wait = wait
+        self.pop_restarts = pop_restarts
         self.verbose = verbose
         self.n_jobs = n_jobs
         self.normed = normed
@@ -181,7 +183,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.label_mapping = {}
         self.shapelets = []
         self.top_k = None
-
+        self.should_reset_pop = False
+        self.pop_restart_counter = 0
         self.apply_differencing = True
         # self.dist_function = dtw, euclidean, _pdist_location
         self.dist_function = euclidean
@@ -282,11 +285,19 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
     def rebuild_diffed(series):
         return np.insert(np.cumsum(series), 0, 0)
 
-    def _early_stopping_check(self):
-        return (
-            self.it - self.last_top_k_change > self.wait
-        )
 
+    def _check_early_stopping(self):
+        if self.it - self.last_top_k_change > self.wait:
+            if self.pop_restart_counter < self.pop_restarts:
+                # Will trigger population reset
+                self.last_top_k_change = self.it
+                self.should_reset_pop = True
+            else:
+                return True
+
+        return False
+
+ 
     def _update_coverage(self, subgroup, coverage):
         # Since we have just created a new subgroup,
         # we add +1 to every subgroup member instance counts
@@ -318,10 +329,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.top_k  = top_k_formatted
             
     def _update_top_k(self, pop, it, tools):
-        print(f"[INFO] Updating TOP-K it{it}")
         coverage = np.ones(len(self.X))
         weights = np.power([self.coverage_alpha], coverage)
-
         pop = list(map(ShapeletIndividual.clone, pop))
 
         if self.top_k is None:
@@ -382,8 +391,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         
         self.top_k_coverage = coverage
         self.top_k = list(map(ShapeletIndividual.clone, new_top_k))
-
-        self._print_pop(self.top_k, tools)
+        # self._print_pop(self.top_k, tools)
         self.top_k_ids = new_top_k_ids
 
     def assert_healthy_individual(self, ind, msg):
@@ -407,6 +415,23 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         logging.info(f'[DEBUG] COMPILING RESULTS:{self.it}') 
         for i in best_pop:
             logging.info(f'[INFO] fitness={i.fitness.values},\ti={i.uuid}') 
+
+    def _create_pop(self, toolbox):
+        # Initialize the population and calculate their initial fitness values
+        self.should_reset_pop = False
+        self.pop_restart_counter += 1
+        pop = toolbox.population(n=self.population_size)
+        fitnesses = list(map(toolbox.evaluate, pop))
+        for ind, fit in zip(pop, fitnesses):
+            while not fit["valid"]:
+                remove_shapelet(ind, toolbox, remove_last=True)
+                fit = toolbox.evaluate(ind)
+
+            ind.fitness.values = fit["value"]
+            ind.subgroup = fit["subgroup"]
+            ind.info = fit["info"]
+
+        return pop
 
     def fit(self, X, y):
         """Extract shapelets from the provided timeseries and labels.
@@ -488,21 +513,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         stats.register("std", lambda arr: np.ma.masked_invalid(arr).std())
         stats.register("max", lambda arr: np.ma.masked_invalid(arr).max())
         stats.register("min", lambda arr: np.ma.masked_invalid(arr).min())
-        # stats.register("q25", lambda x: np.quantile(x, 0.25))
-        # stats.register("q75", lambda x: np.quantile(x, 0.75))
 
-        # Initialize the population and calculate their initial fitness values
-        pop = toolbox.population(n=self.population_size)
-        fitnesses = list(map(toolbox.evaluate, pop))
-        for ind, fit in zip(pop, fitnesses):
-            while not fit["valid"]:
-                remove_shapelet(ind, toolbox, remove_last=True)
-                fit = toolbox.evaluate(ind)
+        pop = self._create_pop(toolbox)
 
-            ind.fitness.values = fit["value"]
-            ind.subgroup = fit["subgroup"]
-            ind.info = fit["info"]
-        
         # Keep track of the best iteration, in order to do stop after `wait`
         # generations without improvement
         self.it = 1
@@ -527,8 +540,13 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         while self.it <= self.iterations:
             logging.info(f'[INFO] it:{self.it}') 
 
-            # Early stopping
-            if self._early_stopping_check(): break
+            # Early stopping and pop reset
+            if self._check_early_stopping(): break
+
+            if self.should_reset_pop:
+                logging.info(f'[INFO] Restarting pop {self.pop_restart_counter+1}/{self.pop_restarts}') 
+                pop = self._create_pop(toolbox)
+
 
             gen_start = time.time()
 
@@ -559,12 +577,12 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
             # Replace population and update hall of fame, statistics & history
             new_pop = toolbox.select(offspring, self.population_size - 1)
-            # fittest_inds = tools.selBest(pop + offspring, 1)
-            fittest_inds = max(
-                pop + offspring, 
-                key=lambda ind: ind.fitness.values[0]
-            )
-            pop[:] = new_pop + [fittest_inds]            
+            fittest_inds = tools.selBest(pop + offspring, 1)
+            # fittest_inds = max(
+            #     pop + offspring, 
+            #     key=lambda ind: ind.fitness.values[0]
+            # )
+            pop[:] = new_pop + fittest_inds            
             it_stats = stats.compile(pop)
             self.history.append([self.it, it_stats])
 
@@ -580,12 +598,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                     new_ind=best_ind,
                 )
 
-            # Update bag of best individuals
+            # Update top-k
             self._update_top_k(pop, self.it, tools)
             self.it += 1
-
-            # self._print_pop(pop, tools)
-        
 
         self.pop = pop
         if self.apply_differencing:

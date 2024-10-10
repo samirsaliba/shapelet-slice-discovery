@@ -77,18 +77,19 @@ subgroup_quality_func = SubgroupQuality(
     distance_function=SubgroupQuality.simple_mean, 
     sg_size_beta=SUBGROUP_SIZE_BETA,
     standardize=False,
-    max_it=200
+    max_it=500
 )
 
 args = {
     "k": 5,
     "coverage_alpha": COVERAGE_ALPHA,
-    "population_size": 300, 
-    "iterations": 30,  
+    "population_size": 100, 
+    "iterations": 100,  
     "mutation_prob": 0.3, 
     "crossover_prob": 0.3,
     "max_shaps": 3,
-    "wait": 15, 
+    "wait": 10,
+    "pop_restarts": 5,
     "min_len": 20,
     "max_len": 40,
     "n_jobs": multiprocessing.cpu_count() - 3,
