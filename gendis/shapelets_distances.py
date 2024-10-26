@@ -2,63 +2,64 @@ from dtaidistance import dtw as _dtw
 from dtaidistance import ed_cc
 import numpy as np
 
-try:
-    from gendis.pairwise_dist import _pdist, _pdist_location
-except:
-    from pairwise_dist import _pdist, _pdist_location
-
 
 def calculate_shapelet_dist_matrix(
-    X, shapelets, 
-    dist_function,
-    return_positions=False,
-    cache=None
-    ):
+    X, shapelets, dist_function, return_positions=False, cache=None
+):
     """Calculate the distance matrix for a set of shapelets"""
     D = -1 * np.ones((len(X), len(shapelets)))
     L = -1 * np.ones((len(X), len(shapelets)))
-    # First check if we already calculated distances for a shapelet
-    if cache is not None:
-        for shap_ix, shap in enumerate(shapelets):
-            # shap_hash = hash(tuple(shap.flatten()))
-            cache_val = cache.get(shap.id)
-            if cache_val is not None:
-                d, l = cache_val
-                D[:, shap_ix] = d
-                L[:, shap_ix] = l
 
-    # Fill up the 0 entries
-    res = dist_function(X, shapelets, D, L)
+    if cache is None:
+        cache = {}
 
-    if res is not None:
-        D = res[:,0,:]
-        if return_positions:
-            L = res[:,1,:]
+    for shap_ix, shap in enumerate(shapelets):
+        cache_val = cache.get(shap.id)
+        if cache_val is not None:
+            d, l = cache_val
 
-    # Fill up our cache
-    if cache is not None:
-        for shap_ix, shap in enumerate(shapelets):
-            # shap_hash = hash(tuple(shap.flatten()))
-            cache.set(shap.id, (D[:, shap_ix], L[:, shap_ix]))
+        else:
+            # res = np.apply_along_axis(sliding_window_dist, 1, X, shap=shap)
+            res = dist_function(X, shap, D, L)
+            d, l = res[:, 0], res[:, 1]
+            cache.set(shap.id, (d, l))
+
+        D[:, shap_ix] = d
+        L[:, shap_ix] = l
 
     return D, L
 
-def _row_dist_sliding_helper(x, shaps, dist_fn):
+
+def sliding_window_dist(x, shap):
+    x = x.copy()
     step = 1
-    shap_dists = []
-    shap_positions = []
-    for shap in shaps:
-        remainder = len(x) % step
-        min_dist = np.inf
-        pos = None
-        for k in range(0, len(x) - len(shap) + 1 - remainder, step):
-            dist = dist_fn(x[ k : k+len(shap) ], shap)
-            if dist < min_dist: 
-                min_dist = dist
-                pos = k
-        shap_dists.append(min_dist)
-        shap_positions.append(pos)
-    return np.array(shap_dists), np.array(shap_positions)
+    shap_len = len(shap)
+
+    # Extract all possible windows (subsequences) from x with length equal to the shapelet
+    n_windows = (len(x) - shap_len) // step + 1
+    windows = np.lib.stride_tricks.sliding_window_view(x, shap_len)[::step]
+
+    # Compute the distance between the shapelet and all windows
+    distances = np.array([ed_cc.distance(window.copy(), shap) for window in windows])
+
+    # Find the minimum distance and the corresponding position
+    pos = np.argmin(distances)
+    min_dist = distances[pos]
+
+    return min_dist, pos
+
+
+def _row_dist_sliding_helper(x, shap, dist_fn):
+    step = 1
+    remainder = len(x) % step
+    min_dist = np.inf
+    pos = None
+    for k in range(0, len(x) - len(shap) + 1 - remainder, step):
+        dist = dist_fn(x[k : k + len(shap)], shap)
+        if dist < min_dist:
+            min_dist = dist
+            pos = k
+    return min_dist, pos
 
 
 def _distance_wrapper(timeseries_matrix, shaps, distances, dist_fn):
@@ -67,9 +68,8 @@ def _distance_wrapper(timeseries_matrix, shaps, distances, dist_fn):
 
 
 def dtw(timeseries_matrix, shaps, distances, positions):
-    return _distance_wrapper(
-        timeseries_matrix, shaps, distances, _dtw.distance_fast)
+    return _distance_wrapper(timeseries_matrix, shaps, distances, _dtw.distance_fast)
+
 
 def euclidean(timeseries_matrix, shaps, distances, positions):
-    return _distance_wrapper(
-        timeseries_matrix, shaps, distances, ed_cc.distance)
+    return _distance_wrapper(timeseries_matrix, shaps, distances, ed_cc.distance)

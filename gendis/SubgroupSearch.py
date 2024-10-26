@@ -2,28 +2,19 @@ import numpy as np
 from scipy.stats import wasserstein_distance, mannwhitneyu
 from sklearn.preprocessing import StandardScaler
 
-try:
-    from LRUCache import LRUCache
-except:
-    from gendis.LRUCache import LRUCache
+from .LRUCache import LRUCache
 
-class SubgroupQuality:
-    """
-    Parameters
-    ----------
-    distance_function : callable
-        The distribution distance function to use
-    shapelet_dist_threshold : float
-        The threshold for the distance matrix
-    """
+
+class SubgroupSearch:
+    """TODO"""
 
     def __init__(
         self,
-        distance_function, 
+        distance_function,
         sg_size_beta,
         standardize=False,
-        max_it = 100,
-    ):  
+        max_it=100,
+    ):
         self.alpha = 0.8
         self.cache = LRUCache(2048)
         self.sg_size_beta = sg_size_beta
@@ -55,7 +46,7 @@ class SubgroupQuality:
         """
         return distances < threshold
 
-    def compute_fitness_for_shapelet(self, dists, y, shapelet, threshold):
+    def compute_fitness_for_shapelet(self, dists, y, threshold):
         """
         Compute the fitness for a single shapelet based on its threshold.
 
@@ -65,8 +56,6 @@ class SubgroupQuality:
             Distance matrix column.
         y : array-like
             Target variable.
-        shapelet : array-like
-            The shapelet for which fitness is being computed.
         threshold : float
             The threshold used for filtering the subgroup.
 
@@ -84,7 +73,10 @@ class SubgroupQuality:
         sizeW = self.subgroup_size_factor(len(subgroup_y), len(y))
         shap_distance_factor = np.median(dists[subgroup])
 
-        fitness = self.alpha * (distribution_delta * sizeW) - (1-self.alpha)*shap_distance_factor
+        fitness = (
+            self.alpha * (distribution_delta * sizeW)
+            - (1 - self.alpha) * shap_distance_factor
+        )
 
         return fitness
 
@@ -97,14 +89,13 @@ class SubgroupQuality:
         thresh_minus = threshold - epsilon
 
         # Compute fitness for perturbed thresholds
-        fitness_plus = self.compute_fitness_for_shapelet(dists, y, shapelet, thresh_plus)
-        fitness_minus = self.compute_fitness_for_shapelet(dists, y, shapelet, thresh_minus)
+        fitness_plus = self.compute_fitness_for_shapelet(dists, y, thresh_plus)
+        fitness_minus = self.compute_fitness_for_shapelet(dists, y, thresh_minus)
 
         # Approximate gradient using finite differences
         grad_threshold = (fitness_plus - fitness_minus) / (2 * epsilon)
 
         return grad_threshold
-
 
     def get_optimal_threshold_shapelet(self, shapelet, dists, y):
         """
@@ -119,33 +110,39 @@ class SubgroupQuality:
         lower_bound, upper_bound = np.percentile(dists, percentiles)
 
         # Simulated annealing parameters
-        num_restarts = 5 # Number of independent Simulated Annealing runs
+        perturbation = 0.05 * (upper_bound - lower_bound)
+        num_restarts = 5  # Number of independent Simulated Annealing runs
         max_iterations = self.max_it // num_restarts
         initial_temperature = 1.0
         min_temperature = 0.001  # Stopping criterion for the cooling process
-        cooling_rate = 0.95      # Cooling rate to decrease the temperature
-                
+        cooling_rate = 0.95  # Cooling rate to decrease the temperature
+
         global_best_threshold = None
         global_best_fitness = -np.inf
 
         # Multiple Simulated Annealing runs
-        for restart in range(num_restarts):
+        for _ in range(num_restarts):
             # Set the starting point for the current run (random point within the range)
             current_threshold = np.random.uniform(lower_bound, upper_bound)
-            current_fitness = self.compute_fitness_for_shapelet(dists, y, shapelet, current_threshold)
+            current_fitness = self.compute_fitness_for_shapelet(
+                dists, y, current_threshold
+            )
             best_threshold = current_threshold
             best_fitness = current_fitness
 
             temperature = initial_temperature
 
             # Single run of Simulated Annealing
-            for iteration in range(max_iterations):
+            for _ in range(max_iterations):
                 if temperature < min_temperature:
                     break
 
-                # Randomly perturb the threshold within the bounds
-                new_threshold = np.random.uniform(lower_bound, upper_bound)
-                new_fitness = self.compute_fitness_for_shapelet(dists, y, shapelet, new_threshold)
+                # Find a new point in the vicinity
+                new_threshold = current_threshold + np.random.uniform(
+                    -perturbation, perturbation
+                )
+                new_threshold = np.clip(new_threshold, lower_bound, upper_bound)
+                new_fitness = self.compute_fitness_for_shapelet(dists, y, new_threshold)
 
                 # Determine if the new threshold should be accepted
                 fitness_difference = new_fitness - current_fitness
@@ -175,12 +172,23 @@ class SubgroupQuality:
 
         # Cache the best solution across all restarts
         self.cache.set(shapelet.id, global_best_threshold)
-        shapelet.threshold = global_best_threshold
-        return global_best_threshold
+        try:
+            assert global_best_threshold is not None, "None threshold"
+        except Exception as e:
+            print(shapelet.id)
+            print(current_fitness)
+            print(best_fitness)
+            print(num_restarts, max_iterations, temperature)
+            th = np.percentile(dists, 10)
+            ft = self.compute_fitness_for_shapelet(dists, y, global_best_threshold)
+            print(th, ft)
+            raise (e)
 
+        return global_best_threshold
 
     def get_shapelet_subgroup(self, shap, distances, y):
         threshold = self.get_optimal_threshold_shapelet(shap, distances, y)
+        shap.threshold = threshold
         subgroup = self.get_threshold_filter(distances, threshold)
 
         return threshold, subgroup
@@ -204,21 +212,22 @@ class SubgroupQuality:
 
         distribution_delta = self.distance_function(subgroup_y, y)
         sizeW = self.subgroup_size_factor(subgroup_n, len(y))
-        fitness =  distribution_delta * sizeW
+        fitness = distribution_delta * sizeW
         sg_mean = np.mean(subgroup_y)
         return {
-            'valid': subgroup_n>0,
-            'value': np.array([fitness]),
-            'subgroup': subgroup,
-            'info': {
-                'fitness': fitness,
-                'distribution_delta': distribution_delta,
-                'shaps_distances_thresholds': thresholds,
-                'subgroup_size_weight': sizeW,
-                'subgroup_error_mean': sg_mean,
-                'population_mean': np.mean(y),
-                'subgroup_size': subgroup_n,
-            }
+            "valid": subgroup_n > 0,
+            "value": np.array([fitness]),
+            "subgroup": subgroup,
+            "thresholds": [thresholds],
+            "info": {
+                "fitness": fitness,
+                "distribution_delta": distribution_delta,
+                "subgroup_size_weight": sizeW,
+                "subgroup_error_mean": sg_mean,
+                "population_mean": np.mean(y),
+                "subgroup_size": subgroup_n,
+                "thresholds": [thresholds],
+            },
         }
 
     @staticmethod
