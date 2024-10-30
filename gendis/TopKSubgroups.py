@@ -1,4 +1,5 @@
 import copy
+from functools import partial
 import logging
 import numpy as np
 
@@ -46,7 +47,7 @@ class TopKSubgroups:
         base = [self.coverage_alpha]
         return np.power(base, coverage), coverage
 
-    def _coverage_factor(self, weights, subgroup):
+    def _coverage_factor(self, subgroup, weights):
         """
         Calculates the weighted coverage score for a subgroup.
 
@@ -61,7 +62,7 @@ class TopKSubgroups:
         sg_weights_total = subgroup.sum() * self.coverage_alpha
         return in_sg_weights / sg_weights_total
 
-    def update(self, pop, it, length_input):
+    def update(self, pop, it, length_input, toolbox):
         """
         Updates the top-k population by selecting the k most diverse and fit individuals.
 
@@ -72,7 +73,7 @@ class TopKSubgroups:
         """
         coverage = np.ones(length_input)
         weights = np.power([self.coverage_alpha], coverage)
-        pop = list(map(copy.deepcopy, pop))
+        # pop = list(map(copy.deepcopy, pop))
 
         if self.subgroups is None:
             pop_star = pop
@@ -81,7 +82,7 @@ class TopKSubgroups:
         else:
             pop_star = self.subgroups + pop
 
-        best = max(pop_star, key=lambda ind: ind.fitness.values[0])
+        best = copy.deepcopy(max(pop_star, key=lambda ind: ind.fitness.values[0]))
         best.coverage_weight = 1.0
         new_top_k = [best]
         new_ids = set([best.uuid])
@@ -92,9 +93,18 @@ class TopKSubgroups:
 
             fitness_values = []
             coverage_factors = []
-            for ind in pop_star:
-                fitness_values.append(ind.fitness.values[0])
-                coverage_factors.append(self._coverage_factor(weights, ind.subgroup))
+
+            # for ind in pop_star:
+            #     fitness_values.append(ind.fitness.values[0])
+            #     coverage_factors.append(self._coverage_factor(weights, ind.subgroup))
+
+            fitness_values, subgroups = zip(
+                *[(x.fitness.values[0], x.subgroup) for x in pop_star]
+            )
+            fitness_values, subgroups = list(fitness_values), list(subgroups)
+
+            _cov_func = partial(self._coverage_factor, weights=weights)
+            coverage_factors = list(toolbox.map(_cov_func, subgroups))
 
             fitness_values = np.array(fitness_values)
             coverage_factors = np.array(coverage_factors)
@@ -115,6 +125,7 @@ class TopKSubgroups:
                     break
 
             if found_new_best:
+                best = copy.deepcopy(best)
                 best.coverage_weight = best_coverage
                 new_top_k.append(best)
                 new_ids.add(best.uuid)
@@ -127,7 +138,7 @@ class TopKSubgroups:
             self.last_update = it
 
         self.coverage = coverage
-        self.subgroups = list(map(copy.deepcopy, new_top_k))
+        self.subgroups = new_top_k
         self.ids = new_ids
 
     def to_dict(self):

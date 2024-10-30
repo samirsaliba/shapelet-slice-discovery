@@ -18,7 +18,7 @@ def setup_logging(path, timestamp):
         filename=log_file,
         filemode='a',
         format='%(asctime)s - %(levelname)s - %(message)s',
-        level=logging.INFO
+        level=logging.INFO,
     )
 
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))

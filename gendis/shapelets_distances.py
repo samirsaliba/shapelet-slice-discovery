@@ -1,75 +1,69 @@
-from dtaidistance import dtw as _dtw
-from dtaidistance import ed_cc
-import numpy as np
+import torch
 
 
-def calculate_shapelet_dist_matrix(
-    X, shapelets, dist_function, return_positions=False, cache=None
-):
-    """Calculate the distance matrix for a set of shapelets"""
-    D = -1 * np.ones((len(X), len(shapelets)))
-    L = -1 * np.ones((len(X), len(shapelets)))
+def calculate_shapelet_dist_matrix(X, shapelets, cache=None, device="cuda"):
+    """
+    Calculate the distance matrix for a set of shapelets using PyTorch for GPU acceleration.
 
-    if cache is None:
-        cache = {}
+    Parameters:
+    X (torch.Tensor): Time series data (2D tensor where rows are instances and columns are time steps)
+    shapelets (list of Shapelet): List of shapelets to calculate distances against
+    cache (dict): Optional cache to store previously computed distances
+    device (str): 'cuda' for GPU or 'cpu' for CPU calculations
+
+    Returns:
+    (D (np.ndarray): Distances matrix, L (np.ndarray): Locations matrix)
+    """
+    # Move data to torch tensors
+    torch.multiprocessing.set_sharing_strategy("file_system")
+
+    D = torch.full((len(X), len(shapelets)), -1.0, device=device)
+    L = torch.full((len(X), len(shapelets)), -1.0, device=device)
 
     for shap_ix, shap in enumerate(shapelets):
-        cache_val = cache.get(shap.id)
+        # Move the shapelet to a tensor
+        shap_torch = torch.tensor(shap, dtype=torch.float32, device=device)
+        shap_len = len(shap)
+
+        # Check cache
+        cache_val = None
+        if cache is not None:
+            cache_val = cache.get(shap.id)
+
         if cache_val is not None:
             d, l = cache_val
-
         else:
-            # res = np.apply_along_axis(sliding_window_dist, 1, X, shap=shap)
-            res = dist_function(X, shap, D, L)
-            d, l = res[:, 0], res[:, 1]
-            cache.set(shap.id, (d, l))
+            # Calculate distances and positions for each row in X
+            d, l = sliding_window_dist(X, shap_torch, shap_len)
+
+            if cache is not None:
+                cache.set(shap.id, (d.cpu(), l.cpu()))
 
         D[:, shap_ix] = d
         L[:, shap_ix] = l
 
-    return D, L
+    return D.cpu().numpy(), L.cpu().numpy()
 
 
-def sliding_window_dist(x, shap):
-    x = x.copy()
-    step = 1
-    shap_len = len(shap)
+def sliding_window_dist(X, shap, shap_len):
+    """
+    Calculate the minimum distance between a shapelet and each time series in X using sliding windows.
 
-    # Extract all possible windows (subsequences) from x with length equal to the shapelet
-    n_windows = (len(x) - shap_len) // step + 1
-    windows = np.lib.stride_tricks.sliding_window_view(x, shap_len)[::step]
+    Parameters:
+    X (torch.Tensor): Time series data (2D tensor where rows are instances and columns are time steps)
+    shap (torch.Tensor): Shapelet tensor
+    shap_len (int): Length of the shapelet
 
-    # Compute the distance between the shapelet and all windows
-    distances = np.array([ed_cc.distance(window.copy(), shap) for window in windows])
+    Returns:
+    torch.Tensor, torch.Tensor: Minimum distances and positions for each time series instance
+    """
+    # Unfold X to get all sliding windows of the shapelet's length
+    windows = X.unfold(1, shap_len, step=1)  # Shape: (N, num_windows, shap_len)
 
-    # Find the minimum distance and the corresponding position
-    pos = np.argmin(distances)
-    min_dist = distances[pos]
+    # Calculate the Euclidean distance between each sliding window and the shapelet
+    distances = torch.norm(windows - shap, dim=2)  # Broadcasting to calculate distances
 
-    return min_dist, pos
+    # Find the minimum distance and its index for each row in X
+    min_distances, min_positions = distances.min(dim=1)
 
-
-def _row_dist_sliding_helper(x, shap, dist_fn):
-    step = 1
-    remainder = len(x) % step
-    min_dist = np.inf
-    pos = None
-    for k in range(0, len(x) - len(shap) + 1 - remainder, step):
-        dist = dist_fn(x[k : k + len(shap)], shap)
-        if dist < min_dist:
-            min_dist = dist
-            pos = k
-    return min_dist, pos
-
-
-def _distance_wrapper(timeseries_matrix, shaps, distances, dist_fn):
-    apply_fn = lambda x: _row_dist_sliding_helper(x, shaps, dist_fn)
-    return np.apply_along_axis(apply_fn, 1, timeseries_matrix)
-
-
-def dtw(timeseries_matrix, shaps, distances, positions):
-    return _distance_wrapper(timeseries_matrix, shaps, distances, _dtw.distance_fast)
-
-
-def euclidean(timeseries_matrix, shaps, distances, positions):
-    return _distance_wrapper(timeseries_matrix, shaps, distances, ed_cc.distance)
+    return min_distances, min_positions

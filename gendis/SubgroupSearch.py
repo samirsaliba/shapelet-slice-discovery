@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.stats import wasserstein_distance, mannwhitneyu
 from sklearn.preprocessing import StandardScaler
+import torch
+from torch.nn import functional
 
 from .LRUCache import LRUCache
 
@@ -14,16 +16,17 @@ class SubgroupSearch:
         sg_size_beta,
         standardize=False,
         max_it=100,
+        cache_size=4096,
     ):
-        self.alpha = 0.8
-        self.cache = LRUCache(2048)
+        self.alpha = 0.5
+        self.cache = LRUCache(cache_size)
         self.sg_size_beta = sg_size_beta
         self.distance_function = distance_function
         self.standardize = standardize
         self.max_it = max_it
 
-    def __call__(self, D, y, shaps=None):
-        return self.evaluate(D, y, shaps=shaps)
+    def __call__(self, D, y, shaps, L=None):
+        return self.evaluate(D, y, shapelets=shaps, L=L)
 
     def subgroup_size_factor(self, subgroup_n, y_n):
         """Score that favors larger subgroups"""
@@ -44,7 +47,7 @@ class SubgroupSearch:
             Boolean array indicating whether each instance i belongs to the subgroup,
             considering the distance to this specific shapelet.
         """
-        return distances < threshold
+        return distances <= threshold
 
     def compute_fitness_for_shapelet(self, dists, y, threshold):
         """
@@ -80,34 +83,18 @@ class SubgroupSearch:
 
         return fitness
 
-    def compute_gradient_threshold(self, dists, y, shapelet, threshold, epsilon):
-        """
-        Compute the gradient of the fitness function with respect to a single shapelet's threshold.
-        """
-        # Compute perturbed thresholds
-        thresh_plus = threshold + epsilon
-        thresh_minus = threshold - epsilon
-
-        # Compute fitness for perturbed thresholds
-        fitness_plus = self.compute_fitness_for_shapelet(dists, y, thresh_plus)
-        fitness_minus = self.compute_fitness_for_shapelet(dists, y, thresh_minus)
-
-        # Approximate gradient using finite differences
-        grad_threshold = (fitness_plus - fitness_minus) / (2 * epsilon)
-
-        return grad_threshold
-
-    def get_optimal_threshold_shapelet(self, shapelet, dists, y):
+    def get_optimal_threshold_shapelet(self, shapelet, distances, y):
         """
         Compute the optimal threshold for a given shapelet using multiple runs of Simulated Annealing.
         """
-        cache_threshold = self.cache.get(shapelet.id)
-        if cache_threshold is not None:
-            return cache_threshold
+        if self.cache:
+            cache_threshold = self.cache.get(shapelet.id)
+            if cache_threshold is not None:
+                return cache_threshold
 
         # Start with percentiles as the initial range for the threshold
         percentiles = [0, 100]
-        lower_bound, upper_bound = np.percentile(dists, percentiles)
+        lower_bound, upper_bound = np.percentile(distances, percentiles)
 
         # Simulated annealing parameters
         perturbation = 0.05 * (upper_bound - lower_bound)
@@ -117,15 +104,18 @@ class SubgroupSearch:
         min_temperature = 0.001  # Stopping criterion for the cooling process
         cooling_rate = 0.95  # Cooling rate to decrease the temperature
 
-        global_best_threshold = None
-        global_best_fitness = -np.inf
+        # "Educated" first guess of 10% percentile
+        global_best_threshold = np.percentile(distances, 10)
+        global_best_fitness = self.compute_fitness_for_shapelet(
+            distances, y, global_best_threshold
+        )
 
         # Multiple Simulated Annealing runs
         for _ in range(num_restarts):
             # Set the starting point for the current run (random point within the range)
             current_threshold = np.random.uniform(lower_bound, upper_bound)
             current_fitness = self.compute_fitness_for_shapelet(
-                dists, y, current_threshold
+                distances, y, current_threshold
             )
             best_threshold = current_threshold
             best_fitness = current_fitness
@@ -142,7 +132,9 @@ class SubgroupSearch:
                     -perturbation, perturbation
                 )
                 new_threshold = np.clip(new_threshold, lower_bound, upper_bound)
-                new_fitness = self.compute_fitness_for_shapelet(dists, y, new_threshold)
+                new_fitness = self.compute_fitness_for_shapelet(
+                    distances, y, new_threshold
+                )
 
                 # Determine if the new threshold should be accepted
                 fitness_difference = new_fitness - current_fitness
@@ -171,19 +163,8 @@ class SubgroupSearch:
                 global_best_fitness = best_fitness
 
         # Cache the best solution across all restarts
-        self.cache.set(shapelet.id, global_best_threshold)
-        try:
-            assert global_best_threshold is not None, "None threshold"
-        except Exception as e:
-            print(shapelet.id)
-            print(current_fitness)
-            print(best_fitness)
-            print(num_restarts, max_iterations, temperature)
-            th = np.percentile(dists, 10)
-            ft = self.compute_fitness_for_shapelet(dists, y, global_best_threshold)
-            print(th, ft)
-            raise (e)
-
+        if self.cache:
+            self.cache.set(shapelet.id, global_best_threshold)
         return global_best_threshold
 
     def get_shapelet_subgroup(self, shap, distances, y):
@@ -191,24 +172,46 @@ class SubgroupSearch:
         shap.threshold = threshold
         subgroup = self.get_threshold_filter(distances, threshold)
 
+        assert sum(subgroup) > 0, "Shapelet covering zero instances"
         return threshold, subgroup
 
-    def get_set_subgroup(self, shapelets, D, y):
+    def fit(self, shapelets, D, y):
         thresholds = []
         subgroups = []
         for i, shap in enumerate(shapelets):
-            dists = D[:, i]
-            threshold, subgroup = self.get_shapelet_subgroup(shap, dists, y)
+            distances = D[:, i]
+            threshold, subgroup = self.get_shapelet_subgroup(shap, distances, y)
             thresholds.append(threshold)
             subgroups.append(subgroup)
 
         subgroup = np.all(subgroups, axis=0)
         return subgroup, thresholds
 
-    def evaluate(self, D, y, shaps):
-        subgroup, thresholds = self.get_set_subgroup(shaps, D, y)
+    def transform(self, D, thresholds):
+        subgroups = []
+        for i, threshold in enumerate(thresholds):
+            distances = D[:, i]
+            subgroup = self.get_threshold_filter(distances, threshold)
+            subgroups.append(subgroup)
+
+        return np.all(subgroups, axis=0)
+
+    def evaluate(self, D, y, shapelets, L=None):
+        subgroup, thresholds = self.fit(shapelets, D, y)
         subgroup_y = y[subgroup]
         subgroup_n = np.sum(subgroup)
+
+        if subgroup_n < 1:
+            for shap_i, shap in enumerate(shapelets):
+                print(shap)
+                print(shap.id, shap.index, shap.start, len(shap))
+                print(f"threshold={thresholds[shap_i]}")
+                print(
+                    f"self-distance={D[shap.index, shap_i]}, min-dist={min(D[:, shap_i])}"
+                )
+
+            print(shapelets.op_history)
+            raise ValueError("Individual covering zero instances")
 
         distribution_delta = self.distance_function(subgroup_y, y)
         sizeW = self.subgroup_size_factor(subgroup_n, len(y))
@@ -218,7 +221,8 @@ class SubgroupSearch:
             "valid": subgroup_n > 0,
             "value": np.array([fitness]),
             "subgroup": subgroup,
-            "thresholds": [thresholds],
+            "subgroup_size": subgroup_n,
+            "thresholds": thresholds,
             "info": {
                 "fitness": fitness,
                 "distribution_delta": distribution_delta,
@@ -226,7 +230,7 @@ class SubgroupSearch:
                 "subgroup_error_mean": sg_mean,
                 "population_mean": np.mean(y),
                 "subgroup_size": subgroup_n,
-                "thresholds": [thresholds],
+                "thresholds": thresholds,
             },
         }
 

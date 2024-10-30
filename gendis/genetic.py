@@ -2,20 +2,23 @@ import copy
 from deap import base, creator, tools
 from dtaidistance.preprocessing import differencing
 import logging
-import multiprocessing
+import torch.multiprocessing as mp
 import numpy as np
 import pandas as pd
 import pickle
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.preprocessing import StandardScaler
 import time
+import torch
 import warnings
+
+# Ensure 'spawn' start method for compatibility, especially on some systems
+mp.set_start_method("spawn", force=True)
 
 warnings.filterwarnings("ignore")
 
 from .individual import (
     Shapelet,
-    ShapeletIndividual,  # individual_to_dict, individual_from_dict
+    ShapeletIndividual,
 )
 from .LRUCache import LRUCache
 from .operators import (
@@ -28,11 +31,7 @@ from .operators import (
     replace_shapelet,
     smooth_shapelet,
 )
-from .shapelets_distances import (
-    calculate_shapelet_dist_matrix,
-    euclidean,
-    dtw,
-)
+from .shapelets_distances import calculate_shapelet_dist_matrix
 
 
 class GeneticExtractor(BaseEstimator, TransformerMixin):
@@ -73,10 +72,6 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
     verbose : boolean
         Whether to print some statistics in every generation
 
-    plot : object
-        Whether to plot the individuals every generation (if the population
-        size is <= 20), or to plot the fittest individual
-
     Attributes
     ----------
     shapelets : array-like
@@ -113,14 +108,14 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         crossover_prob,
         wait=10,
         pop_restarts=5,
-        plot=None,
         max_shaps=None,
-        n_jobs=1,
         max_len=None,
         min_len=0,
         init_ops=[random_shapelet],
         cx_ops=[crossover_AND, crossover_uniform],
         mut_ops=[add_shapelet, smooth_shapelet],
+        cache_size=4096,
+        n_jobs=1,
         verbose=False,
         normed=False,
     ):
@@ -132,27 +127,27 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.iterations = iterations
         self.mutation_prob = mutation_prob
         self.crossover_prob = crossover_prob
-        self.plot = plot
         self.wait = wait
         self.pop_restarts = pop_restarts
-        self.verbose = verbose
-        self.n_jobs = n_jobs
-        self.normed = normed
+        self.max_shaps = max_shaps
         self.min_len = min_len
         self.max_len = max_len
-        self.max_shaps = max_shaps
         self.init_ops = init_ops
         self.cx_ops = cx_ops
         self.mut_ops = mut_ops
-        self.is_fitted = False
+        self.cache_size = cache_size
+        self.n_jobs = n_jobs
+
+        self.verbose = verbose
+        self.normed = normed
+        self.plot = False
 
         # Attributes
-        self.top_k = top_k
+        self.is_fitted = False
         self.label_mapping = {}
         self.should_reset_pop = False
         self.pop_restart_counter = 0
         self.apply_differencing = True
-        self.dist_function = euclidean
 
     @staticmethod
     def preprocess_input(X, y):
@@ -191,34 +186,43 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         return init_op(
             X=self.X,
             n_shapelets=n_shapelets,
-            min_len_series=self._min_length_series,
             max_len=self.max_len,
             min_len=self.min_len,
         )
 
-    def _eval_individual(self, shaps):
+    def _eval_individual(self, ind):
         """Evaluate the fitness of an individual"""
-        D, _ = calculate_shapelet_dist_matrix(
-            self.X,
-            shaps,
-            dist_function=self.dist_function,
-            return_positions=False,
+        D, L = calculate_shapelet_dist_matrix(
+            self.X_tensor,
+            ind,
             cache=self.cache,
+            device=self.device,
         )
+        fit = self.subgroup_search(D=D, y=self.y, shaps=ind, L=L)
+        ind.register_op("eval")
+        ind.fitness.values = fit["value"]
+        ind.valid = fit["valid"]
+        ind.subgroup = fit["subgroup"]
+        ind.subgroup_size = fit["subgroup_size"]
+        ind.thresholds = fit["thresholds"]
+        ind.info = fit["info"]
+        return fit
 
-        return self.subgroup_search(D=D, y=self.y, shaps=shaps)
-
-    def _mutate_individual(self, ind, toolbox):
+    def _mutate_individual(self, ind):
         """Mutate an individual"""
+        assert (
+            len(ind) > 0
+        ), "_mutate_individual requires an individual with at least one shapelet"
         if np.random.random() < self.mutation_prob:
-            clone = toolbox.clone(ind)
+            clone = copy.deepcopy(ind)
             mut_op = np.random.choice(self.mut_ops)
 
-            if mut_op.__name__ == "add_shapelet" and len(clone) >= self.max_shaps:
+            if (
+                mut_op.__name__ == "add_shapelet" and len(clone) >= self.max_shaps
+            ) or clone.subgroup_size == 1:
                 mut_op = replace_shapelet
 
-            mut_op(self.X, ind, toolbox, self.min_len, self.max_len)
-            return clone
+            return mut_op(self.X, clone, self.min_len, self.max_len)
         return ind
 
     def _cross_individuals(self, ind1, ind2, toolbox):
@@ -268,12 +272,6 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                 print(ind)
                 raise (e)
 
-    def _print_pop(self, pop, tools):
-        best_pop = tools.selBest(pop, len(pop))
-        logging.info(f"[DEBUG] COMPILING RESULTS:{self.it}")
-        for i in best_pop:
-            logging.info(f"[INFO] fitness={i.fitness.values},\ti={i.uuid}")
-
     def _create_pop(self, toolbox):
         # Initialize the population and calculate their initial fitness values
         self.should_reset_pop = False
@@ -285,21 +283,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             "info": None,
             "shapelets": [],
         }
-
         pop = toolbox.population(n=self.population_size)
-        fitnesses = list(map(toolbox.evaluate, pop))
-        for ind, fit in zip(pop, fitnesses):
-            # while not fit["valid"]:
-            #     remove_shapelet(self.X, ind, toolbox, self.max_len, remove_last=True)
-            #     fit = toolbox.evaluate(ind)
-            if not fit["valid"]:
-                raise ValueError("Fitness is not valid")
-
-            ind.register_op("init")
-            ind.fitness.values = fit["value"]
-            ind.subgroup = fit["subgroup"]
-            ind.thresholds = fit["thresholds"]
-            ind.info = fit["info"]
+        fitnesses = list(toolbox.map(toolbox.evaluate, pop))
         return pop
 
     def fit(self, X, y):
@@ -314,7 +299,11 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         y : array-like, shape = [n_samples]
             The target values.
         """
+        torch.cuda.empty_cache()
         self.X = X
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        logging.info(f"using torch:{self.device}")
+        self.X_tensor = torch.tensor(X, dtype=torch.float32, device=self.device)
         self.y = y
 
         self._min_length_series = min([len(x) for x in self.X])
@@ -331,7 +320,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         if self.max_shaps is None:
             self.max_shaps = int(np.sqrt(self._min_length_series)) + 1
 
-        self.cache = LRUCache(4096)
+        self.cache = LRUCache(self.cache_size)
         self.history = []
 
         creator.create("FitnessMax", base.Fitness, weights=[1.0])
@@ -341,12 +330,12 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         toolbox = base.Toolbox()
         toolbox.register("clone", copy.deepcopy)
 
-        if self.n_jobs == -1:
-            self.n_jobs = multiprocessing.cpu_count()
-
         if self.n_jobs > 1:
-            pool = multiprocessing.Pool(self.n_jobs)
+            raise NotImplementedError
+            pool = mp.Pool(self.n_jobs)
+            torch.multiprocessing.set_sharing_strategy("file_system")
             toolbox.register("map", pool.map)
+
         else:
             toolbox.register("map", map)
 
@@ -365,7 +354,6 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             "individual", tools.initIterate, creator.Individual, toolbox.create
         )
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-
         toolbox.register("evaluate", self._eval_individual)
         # Small tournaments to ensure diversity
         toolbox.register("select", tools.selTournament, tournsize=2)
@@ -379,16 +367,17 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         self.it = 1
         pop = self._create_pop(toolbox)
-        invalid_ind = []
 
         # The genetic algorithm starts here
+        it_start = time.time()
+        self.invalid_counter = 0
         while self.it <= self.iterations:
             logging.info(
-                f"""\
-                [INFO] it:{self.it}, \
-                invalid% = {100*len(invalid_ind)/len(pop)}"""
+                f"""it:{self.it}, \
+                it_time: {(time.time() - it_start):.2f}"""
             )
-            gen_start = time.time()
+            it_start = time.time()
+            self.invalid_counter = 0
 
             # Early stopping and pop reset
             if self._check_early_stopping():
@@ -396,48 +385,32 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
             if self.should_reset_pop:
                 logging.info(
-                    f"[INFO] Restarting pop {self.pop_restart_counter+1}/{self.pop_restarts}"
+                    f"Restarting pop {self.pop_restart_counter+1}/{self.pop_restarts}"
                 )
                 pop = self._create_pop(toolbox)
 
-            # Clone the population into offspring
-            offspring = list(map(toolbox.clone, pop))
+            # Elitism
+            elit_n = 1
+            elitism_individuals = [toolbox.clone(x) for x in tools.selBest(pop, elit_n)]
+            offspring = pop
 
-            # Iterate over all individuals and apply CX with certain prob
-            for child1, child2 in zip(offspring[::2], offspring[1::2]):
-                self._cross_individuals(child1, child2, toolbox)
+            # Crossover
+            if len(self.deap_cx_ops) > 0:
+                for child1, child2 in zip(offspring[::2], offspring[1::2]):
+                    self._cross_individuals(child1, child2, toolbox)
 
-            # Apply mutation to each individual with a certain probability
-            for indiv in offspring:
-                self._mutate_individual(indiv, toolbox)
+            # Mutation
+            if len(self.deap_mut_ops) > 0:
+                offspring = list(toolbox.map(self._mutate_individual, offspring))
 
-            # Update the fitness values
-            invalid_ind = [ind for ind in offspring if not ind.valid]
-            fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
-            for ind, fit in zip(invalid_ind, fitnesses):
-                # Search for shapelet until individual is valid
-                while not fit["valid"]:
-                    remove_shapelet(X, ind, toolbox, self.max_len, remove_last=True)
-                    ind.register_op("remove")
-                    ind.pop_uuid()
-                    fit = toolbox.evaluate(ind)
-
-                ind.fitness.values = fit["value"]
-                ind.valid = fit["valid"]
-                ind.subgroup = fit["subgroup"]
-                ind.thresholds = fit["thresholds"]
-                ind.info = fit["info"]
+            invalid = [ind for ind in offspring if not ind.valid]
+            _ = list(toolbox.map(toolbox.evaluate, invalid))
 
             # Replace population and update hall of fame, statistics & history
-            new_pop = toolbox.select(offspring, self.population_size - 1)
-            fittest_inds = tools.selBest(pop + offspring, 1)
-            pop[:] = new_pop + fittest_inds
+            new_pop = toolbox.select(offspring, self.population_size - elit_n)
+            pop = new_pop + elitism_individuals
             it_stats = stats.compile(pop)
             self.history.append([self.it, it_stats])
-
-            # Print our statistics
-            if self.verbose:
-                self._print_statistics(stats=it_stats, start=gen_start)
 
             # Have we found a new best score?
             if it_stats["max"] > self.best["score"]:
@@ -452,7 +425,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
                     "shapelets": best,
                 }
 
-            self.top_k.update(pop, self.it, len(self.X))
+            self.top_k.update(pop, self.it, len(self.X), toolbox)
             self.it += 1
 
         self.pop = pop
@@ -462,11 +435,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             ]
 
         self.is_fitted = True
-        del self.X, self.y
+        del self.X, self.X_tensor, self.y
 
-    def transform(
-        self, X, y, shapelets=None, return_positions=False, standardize=False
-    ):
+    def transform(self, X, shapelets, thresholds, return_positions=True):
         """After fitting the Extractor, we can transform collections of
         timeseries in matrices with distances to each of the shapelets in
         the evolved shapelet set.
@@ -481,29 +452,21 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         -------
         """
         assert self.is_fitted, "Fit the gendis model first calling fit()"
-
-        if shapelets is None:
-            shapelets = self.best["shapelets"]
-
-        assert len(shapelets) > 0, "No shapelets found"
+        assert len(shapelets) > 0, "len(shapelets) must be > 0"
 
         index = None
         if hasattr(X, "index"):
             index = X.index
 
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        X_tensor = torch.tensor(X, dtype=torch.float32, device=device)
+        logging.info(f"using torch:{device}")
+
         D, L = calculate_shapelet_dist_matrix(
-            X,
-            shapelets,
-            dist_function=self.dist_function,
-            return_positions=return_positions,
-            cache=self.cache,
+            X_tensor, shapelets, cache=None, device=device
         )
 
-        subgroup, _ = self.subgroup_search.get_set_subgroup(shapelets, D, y)
-
-        if standardize:
-            scaler = StandardScaler()
-            return np.absolute(scaler.fit_transform(D))
+        subgroup = self.subgroup_search.transform(D, thresholds)
 
         cols = [f"D_{i}" for i in range(D.shape[1])]
         if return_positions:
