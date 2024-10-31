@@ -3,9 +3,12 @@ import logging
 import multiprocessing
 import numpy as np
 import os
+from os.path import basename, join, splitext
 import pandas as pd
+import random
 from sklearn.model_selection import ShuffleSplit
 import time
+
 
 from gendis.operators import (
     add_shapelet,
@@ -15,23 +18,31 @@ from gendis.operators import (
     smooth_shapelet,
 )
 from gendis.operators import crossover_AND
+from gendis.processing import preprocess_input
 
 from gendis.genetic import GeneticExtractor
 from gendis.SubgroupSearch import SubgroupSearch
 from gendis.TopKSubgroups import TopKSubgroups
+from gendis.visualization import (
+    plot_best_matching_shaps,
+    plot_error_distributions,
+    plot_shaps,
+)
+
 
 from util import parse_args, save_json, setup_logging
-from viz import plot_best_matching_shaps, plot_error_distributions, plot_shaps
 
 
 def main():
+    RANDOM_SEED_VAL = 1337
+    random.seed(RANDOM_SEED_VAL)
 
     # Setup
     args = parse_args()
     input_file_path = args.input_file_path
-    input_filename = os.path.splitext(os.path.basename(input_file_path))[0]
+    input_filename = splitext(basename(input_file_path))[0]
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_folder = f"./results/{input_filename}_{timestamp}"
+    results_folder = join(os.getcwd(), "results", f"{input_filename}_{timestamp}")
     setup_logging(results_folder, timestamp)
 
     logging.info("Script started")
@@ -46,12 +57,13 @@ def main():
     logging.info("Labels info:")
     logging.info(df.label.value_counts().to_dict())
 
-    plot_error_distributions(df, results_folder)
+    img_path = join(results_folder, "error_dist.png")
+    plot_error_distributions(df, img_path)
 
     try:
         X = df.drop(columns=["pattern_x0", "pattern_x1", "pattern_y", "error", "label"])
     except:
-        X = df.drop(columns=["error", "label"])
+        X = df.drop(columns=["error", "label"]).values
     y = df["error"]
 
     # sss = ShuffleSplit(n_splits=1, test_size=0.1, random_state=0)
@@ -68,11 +80,14 @@ def main():
     K = 10
     COVERAGE_ALPHA = 0.5
     SUBGROUP_SIZE_BETA = 0.5
+    THRESHOLD_MAX_IT = 300
     subgroup_args = {
         "K": K,
         "coverage_alpha": COVERAGE_ALPHA,
         "subgroup_size_beta": SUBGROUP_SIZE_BETA,
         "cache_size": CACHE_SIZE,
+        "random_seed": RANDOM_SEED_VAL,
+        "max_it": THRESHOLD_MAX_IT,
     }
 
     logging.info("Parameters TopKSubgroups and SubgroupDistance")
@@ -81,9 +96,9 @@ def main():
     subgroup_search = SubgroupSearch(
         distance_function=SubgroupSearch.simple_mean,
         sg_size_beta=SUBGROUP_SIZE_BETA,
-        standardize=False,
-        max_it=300,
+        max_it=THRESHOLD_MAX_IT,
         cache_size=CACHE_SIZE,
+        random_seed=RANDOM_SEED_VAL,
     )
 
     top_k = TopKSubgroups(K, COVERAGE_ALPHA)
@@ -117,14 +132,18 @@ def main():
         "n_jobs": 1,  # multiprocessing.cpu_count() - 3,
         "cache_size": CACHE_SIZE,
         "verbose": False,
+        "random_seed": RANDOM_SEED_VAL,
     }
     logging.info("Parameters Gendis")
     logging.info(gendis_args)
-    save_json({**gendis_args, **subgroup_args}, f"{results_folder}/parameters.json")
+    save_json(
+        {**gendis_args, **subgroup_args},
+        join(results_folder, "parameters.json"),
+    )
 
     # Preprocess and model fit
     args = {**gendis_args, **funcs}
-    X_input, y_input = GeneticExtractor.preprocess_input(X_train, y_train)
+    X_input, y_input = preprocess_input(X_train, y_train)
     gendis = GeneticExtractor(**args)
     t0 = time.time()
     gendis.fit(X_input, y_input)
@@ -132,9 +151,10 @@ def main():
 
     # Log results
     logging.info(f"Finished training, it={gendis.it}, time={t1-t0}")
+    logging.info("\n\n\n")
     logging.info("Best individual stats")
     logging.info(gendis.best["info"])
-    save_json(gendis.best["info"], f"{results_folder}/best_info.json")
+    save_json(gendis.best["info"], join(results_folder, "best_info.json"))
 
     logging.info("Top-K info")
     topk_info = []
@@ -144,23 +164,27 @@ def main():
         data["subgroup_indexes"] = np.where(ind.subgroup)
         topk_info.append(data)
     logging.info(topk_info)
-    save_json(topk_info, f"{results_folder}/topk_info.json")
-    save_json(gendis.top_k.to_dict(), f"{results_folder}/topk.json")
+    save_json(topk_info, join(results_folder, "topk_info.json"))
+    save_json(gendis.top_k.to_dict(), join(results_folder, "topk.json"))
 
     logging.info("Top-K coverage")
     logging.info(gendis.top_k.coverage)
     save_json(
-        {"coverage": gendis.top_k.coverage}, f"{results_folder}/topk_coverage.json"
+        {"coverage": gendis.top_k.coverage},
+        join(results_folder, "topk_coverage.json"),
     )
 
     # Plot best matching shapelets
-    for i, ind in enumerate(gendis.top_k.subgroups):
-        # plot_shaps(ind, path=results_folder, ind_label=f"{i}_{ind.uuid}")
+    for i, individual in enumerate(gendis.top_k.subgroups):
+        img_path = join(results_folder, f"shapelets_matching_plots_top_{i}.png")
+        distances, subgroup = gendis.transform(
+            X_input, shapelets=individual, thresholds=individual.thresholds
+        )
         plot_best_matching_shaps(
-            gendis, ind, X_input, y_input, path=results_folder, plot_i=i
+            X_train, distances, subgroup, individual, img_path=img_path
         )
 
-    gendis.save(f"{results_folder}/gendis.pickle")
+    gendis.save(join(results_folder, "gendis.pickle"))
 
 
 if __name__ == "__main__":

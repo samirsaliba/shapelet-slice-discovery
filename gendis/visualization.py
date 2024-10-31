@@ -1,16 +1,19 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from .processing import undifferentiate_series
 
 
-def plot_error_distributions(df, path):
+def plot_error_distributions(df, img_path):
     for lb in df["label"].value_counts().index:
         plt.hist(df.loc[df["label"] == lb, "error"], alpha=0.5, label=lb)
     plt.legend(loc="upper right")
-    img_file = f"{path}/error_dist.png"
-    plt.savefig(img_file)
+    if img_path is not None:
+        plt.savefig(img_path)
+    else:
+        plt.show()
 
 
-def plot_shaps(shaps, path, ind_label, x_label="Time", y_label="Value"):
+def plot_shaps(shaps, img_path=None, x_label="Time", y_label="Value"):
     """
     Plots multiple shapelets on separate subplots.
 
@@ -51,32 +54,24 @@ def plot_shaps(shaps, path, ind_label, x_label="Time", y_label="Value"):
         ax.set_ylabel(y_label)
 
     plt.tight_layout()
-    img_file = f"{path}/shapelets_ind_{ind_label}.png"
-    plt.savefig(img_file)
+    if img_path is not None:
+        plt.savefig(img_path)
+    else:
+        plt.show()
 
 
-def plot_best_matching_shaps(gendis, individual, X_input, y, path, plot_i):
-    X_input = X_input.copy()
-    y = y.copy()
-
-    # Get distances matrix and subgroup mask
-    distances, subgroup = gendis.transform(
-        X_input, shapelets=individual, thresholds=individual.thresholds
-    )
-
+def plot_best_matching_shaps(X, distances, subgroup, individual, img_path=None):
     # Filter datasets based on subgroup mask
+    X = X.copy()
+    distances = distances.copy()
+
     distances = distances[subgroup]
-    X_input = X_input[subgroup]
+    X = X[subgroup]
 
     # Create ordering index based on sum of distances
     d_cols = distances.filter(like="D_")
     distances["D_sum"] = d_cols.sum(axis=1)
     sort_indices = distances["D_sum"].argsort()
-
-    # Order datasets by ordering index
-    distances = distances.iloc[sort_indices]
-    X_input = X_input[sort_indices]
-
     k = 5
 
     # Plot setup
@@ -93,24 +88,26 @@ def plot_best_matching_shaps(gendis, individual, X_input, y, path, plot_i):
         },
     )
 
-    for i in range(k):
+    for i, idx in enumerate(sort_indices[0:k]):
         # Plot timeseries
-        if i >= len(X_input):
+        if i >= len(X):
             break
 
-        timeseries = X_input[i]
+        timeseries = X[idx]
         axs[i].plot(timeseries, alpha=0.4)
 
         # Plot shapelets
         for j, shap in enumerate(individual):
-            position = distances.loc[distances.index[i], f"L_{j}"]
-            shap_x = np.arange(position, position + len(shap))
-            axs[i].plot(shap_x, shap, alpha=0.8)
+            position = distances.loc[distances.index[idx], f"L_{j}"]
+            offset = timeseries[int(position)]
+            shap_undiffed = undifferentiate_series(shap, offset=offset)
+            shap_x = np.arange(position, position + len(shap_undiffed))
+            axs[i].plot(shap_x, shap_undiffed, alpha=0.8)
 
     plt.xticks(np.arange(0, len(timeseries) + 1, 30.0))
     plt.tight_layout()
-    if False:
-        plt.show()  # For future reference
+
+    if img_path is not None:
+        plt.savefig(img_path)
     else:
-        img_file = f"{path}/shapelets_matching_plots_top_{plot_i}.png"
-        plt.savefig(img_file)
+        plt.show()

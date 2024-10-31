@@ -1,5 +1,10 @@
 import array
 import uuid
+import random
+
+# Set a seed for reproducibility
+SEED = 633458965612378623578
+rng = random.Random(SEED)  # Create a random generator with a fixed seed
 
 
 class Shapelet(array.array):
@@ -49,7 +54,6 @@ class Shapelet(array.array):
     def from_dict(cls, d):
         """Create a Shapelet object from a dictionary."""
         shapelet = cls(d["data"], d["index"], d["start"])
-        shapelet.__id = f"i{d["index"]}_s{d["start"]}_l{len(len(d["data"]))}"
         return shapelet
 
 
@@ -60,7 +64,8 @@ class ShapeletIndividual(list):
         self.subgroup = None
         self.subgroup_size = 1
         self.info = None
-        self.__uuid = uuid.uuid4()
+        # Generate reproducible UUID based on the seeded random generator
+        self.__uuid = uuid.UUID(int=rng.getrandbits(128))
         self.__uuid_history = []
         self.__op_history = []
 
@@ -84,7 +89,8 @@ class ShapeletIndividual(list):
     def reset(self):
         self.valid = False
         self.__uuid_history.append(self.__uuid)
-        self.__uuid = uuid.uuid4()
+        # Generate a new reproducible UUID each time reset is called
+        self.__uuid = uuid.UUID(int=rng.getrandbits(128))
         del self.fitness.values
 
     def pop_uuid(self):
@@ -118,7 +124,6 @@ class ShapeletIndividual(list):
             uuid_history=[uuid.UUID(_uuid_str) for _uuid_str in d["__uuid_history"]],
             op_history=d["__op_history"],
         )
-        individual.set_uuid()
         individual.valid = True
         individual.subgroup = d["subgroup"]
         individual.info = d["info"]

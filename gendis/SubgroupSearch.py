@@ -1,9 +1,5 @@
 import numpy as np
 from scipy.stats import wasserstein_distance, mannwhitneyu
-from sklearn.preprocessing import StandardScaler
-import torch
-from torch.nn import functional
-
 from .LRUCache import LRUCache
 
 
@@ -14,16 +10,17 @@ class SubgroupSearch:
         self,
         distance_function,
         sg_size_beta,
-        standardize=False,
         max_it=100,
         cache_size=4096,
+        random_seed=None,
     ):
         self.alpha = 0.5
         self.cache = LRUCache(cache_size)
         self.sg_size_beta = sg_size_beta
         self.distance_function = distance_function
-        self.standardize = standardize
         self.max_it = max_it
+        self.random_seed = random_seed
+        self.np_random = np.random.default_rng(random_seed)
 
     def __call__(self, D, y, shaps, L=None):
         return self.evaluate(D, y, shapelets=shaps, L=L)
@@ -113,7 +110,7 @@ class SubgroupSearch:
         # Multiple Simulated Annealing runs
         for _ in range(num_restarts):
             # Set the starting point for the current run (random point within the range)
-            current_threshold = np.random.uniform(lower_bound, upper_bound)
+            current_threshold = self.np_random.uniform(lower_bound, upper_bound)
             current_fitness = self.compute_fitness_for_shapelet(
                 distances, y, current_threshold
             )
@@ -128,7 +125,7 @@ class SubgroupSearch:
                     break
 
                 # Find a new point in the vicinity
-                new_threshold = current_threshold + np.random.uniform(
+                new_threshold = current_threshold + self.np_random.uniform(
                     -perturbation, perturbation
                 )
                 new_threshold = np.clip(new_threshold, lower_bound, upper_bound)
@@ -145,7 +142,7 @@ class SubgroupSearch:
                 else:
                     # If the new solution is worse, accept it with a probability depending on temperature
                     acceptance_probability = np.exp(fitness_difference / temperature)
-                    if np.random.rand() < acceptance_probability:
+                    if self.np_random.random() < acceptance_probability:
                         current_threshold = new_threshold
                         current_fitness = new_fitness
 
@@ -226,10 +223,10 @@ class SubgroupSearch:
             "info": {
                 "fitness": fitness,
                 "distribution_delta": distribution_delta,
-                "subgroup_size_weight": sizeW,
+                "subgroup_size": subgroup_n,
                 "subgroup_error_mean": sg_mean,
                 "population_mean": np.mean(y),
-                "subgroup_size": subgroup_n,
+                "subgroup_size_weight": sizeW,
                 "thresholds": thresholds,
             },
         }

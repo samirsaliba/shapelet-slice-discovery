@@ -1,5 +1,4 @@
 import numpy as np
-import random
 from .individual import Shapelet, ShapeletIndividual
 import torch
 from torch.nn import functional as F
@@ -17,39 +16,19 @@ from tslearn.clustering import TimeSeriesKMeans
 #    - shapelets (np.array)
 
 
-def random_shapelet(X, n_shapelets, min_len, max_len):
+def random_shapelet(X, n_shapelets, min_len, max_len, np_random):
     """Extract random subseries from the training set"""
     shapelets = []
     m = len(X[0])
     for _ in range(n_shapelets):
-        row = np.random.randint(X.shape[0])
-        length = np.random.randint(min_len, max_len)
-        col = np.random.randint(0, m - length)
+        row = np_random.integers(X.shape[0])
+        length = np_random.integers(min_len, max_len)
+        col = np_random.integers(0, m - length)
         shap_series = X[row][col : col + length]
         shapelet = Shapelet(shap_series, index=row, start=col)
         shapelets.append(shapelet)
 
     return shapelets
-
-
-def kmeans(X, n_shapelets, min_len_series, max_len, n_draw=None, min_len=4):
-    """Sample subseries from the timeseries and apply K-Means on them"""
-    # Sample `n_draw` subseries of length `shp_len`
-    if n_shapelets == 1:
-        return random_shapelet(X, n_shapelets, min_len_series, max_len)
-    if n_draw is None:
-        n_draw = max(n_shapelets, int(np.sqrt(len(X))))
-    shp_len = np.random.randint(max(4, min_len), min(min_len_series, max_len))
-    indices_ts = np.random.choice(len(X), size=n_draw, replace=True)
-    start_idx = np.random.choice(min_len_series - shp_len, size=n_draw, replace=True)
-    end_idx = start_idx + shp_len
-
-    subseries = np.zeros((n_draw, shp_len))
-    for i in range(n_draw):
-        subseries[i] = X[indices_ts[i]][start_idx[i] : end_idx[i]]
-
-    tskm = TimeSeriesKMeans(n_clusters=n_shapelets, metric="euclidean", verbose=False)
-    return tskm.fit(subseries).cluster_centers_
 
 
 ##########################################################################
@@ -63,12 +42,12 @@ def kmeans(X, n_shapelets, min_len_series, max_len, n_draw=None, min_len=4):
 #    - new_shapelets (np.array)
 
 
-def smooth_shapelet(X, individual, min_len, max_len, device="cuda"):
+def smooth_shapelet(individual, np_random, device="cuda", **kwargs):
     """Smooth a random shapelet using PyTorch"""
     # TODO
-    raise NotImplementedError
+    # raise NotImplementedError
     # Choose a random shapelet in the individual
-    rand_shapelet = np.random.randint(len(individual))
+    rand_shapelet = np_random.integers(len(individual))
     shap = individual[rand_shapelet]
 
     # Convert the shapelet to a PyTorch tensor
@@ -100,7 +79,7 @@ def smooth_shapelet(X, individual, min_len, max_len, device="cuda"):
     return individual
 
 
-def remove_shapelet(X, individual, min_len, max_len, remove_last=False):
+def remove_shapelet(individual, np_random, remove_last=False):
     """Remove a random shapelet from the individual"""
     assert (
         len(individual) > 0
@@ -110,7 +89,7 @@ def remove_shapelet(X, individual, min_len, max_len, remove_last=False):
         individual.pop()
         individual.pop_uuid()
         return individual
-    rand_shapelet = np.random.randint(len(individual))
+    rand_shapelet = np_random.integers(len(individual))
 
     individual.pop(rand_shapelet)
     individual.reset()
@@ -118,14 +97,14 @@ def remove_shapelet(X, individual, min_len, max_len, remove_last=False):
     return individual
 
 
-def mask_shapelet(X, individual, min_len, max_len):
+def mask_shapelet(individual, min_len, np_random, **kwargs):
     """Mask part of a random shapelet from the individual"""
-    rand_shapelet = np.random.randint(len(individual))
+    rand_shapelet = np_random.integers(len(individual))
     len_shap = len(individual[rand_shapelet])
 
     if len_shap > min_len:
-        rand_start = np.random.randint(len_shap - min_len)
-        rand_end = np.random.randint(rand_start + min_len, len_shap)
+        rand_start = np_random.integers(len_shap - min_len)
+        rand_end = np_random.integers(rand_start + min_len, len_shap)
         shap = individual[rand_shapelet]
         masked_series = Shapelet(
             shap[rand_start:rand_end], index=shap.index, start=rand_start
@@ -136,16 +115,22 @@ def mask_shapelet(X, individual, min_len, max_len):
     return individual
 
 
-def replace_shapelet(X, individual, min_len, max_len):
+def replace_shapelet(X, individual, min_len, max_len, np_random):
     assert (
         len(individual) > 0
     ), "replace_shapelet requires an individual with at least one shapelet"
 
-    individual = remove_shapelet(X, individual, min_len, max_len)
-    return add_shapelet(X, individual, min_len, max_len)
+    individual = remove_shapelet(individual=individual, np_random=np_random)
+    return add_shapelet(
+        X=X,
+        individual=individual,
+        min_len=min_len,
+        max_len=max_len,
+        np_random=np_random,
+    )
 
 
-def add_shapelet(X, individual, min_len, max_len):
+def add_shapelet(X, individual, min_len, max_len, np_random):
     """
     Mutation operator that adds a new shapelet from the same time series instance as an existing one,
     ensuring the new shapelet is not identical to any already in the individual and meets the minimum length requirement.
@@ -160,19 +145,27 @@ def add_shapelet(X, individual, min_len, max_len):
     individual (ShapeletIndividual): The mutated individual with an additional shapelet
     """
     if len(individual) == 0:
-        individual.append(random_shapelet(X, 1, min_len, max_len)[0])
+        individual.append(
+            random_shapelet(
+                X=X,
+                n_shapelets=1,
+                min_len=min_len,
+                max_len=max_len,
+                np_random=np_random,
+            )[0]
+        )
         return individual
 
     if not hasattr(individual, "subgroup"):
         return individual
 
     individual.reset()
-    index = individual[-1].index  # np.random.choice(np.where(individual.subgroup)[0])
+    index = individual[-1].index  # np_random.choice(np.where(individual.subgroup)[0])
 
     # Get the total length of the time series
     time_series_length = X.shape[1]
-    new_start = random.randint(0, time_series_length - max_len)
-    new_length = random.randint(min_len, max_len)
+    new_start = np_random.integers(0, time_series_length - max_len)
+    new_length = np_random.integers(min_len, max_len)
 
     # Create the new shapelet
     timeseries = X[index][new_start : new_start + new_length]
@@ -183,7 +176,7 @@ def add_shapelet(X, individual, min_len, max_len):
     return individual
 
 
-def slide_shapelet(X, individual, min_len, max_len, max_slide=20):
+def slide_shapelet(X, individual, max_slide=20, **kwargs):
     """Slide a random shapelet forwards or backwards within the X data.
 
     Args:
@@ -199,7 +192,7 @@ def slide_shapelet(X, individual, min_len, max_len, max_slide=20):
 
     individual.reset()
 
-    rand_shapelet_idx = np.random.randint(len(individual))
+    rand_shapelet_idx = np_random.integers(len(individual))
     shapelet = individual[rand_shapelet_idx]
 
     # Get the corresponding time series row from X based on shapelet index
@@ -213,7 +206,7 @@ def slide_shapelet(X, individual, min_len, max_len, max_slide=20):
     start_max = min(len(timeseries) - shapelet_length, shapelet.start + max_slide)
 
     # Choose a new random start position within the valid range
-    new_start = np.random.randint(start_min, start_max + 1)
+    new_start = np_random.integers(start_min, start_max + 1)
 
     # Extract the new shapelet from the time series with the new start position
     new_shapelet_data = timeseries[new_start : new_start + shapelet_length]
@@ -239,7 +232,7 @@ def slide_shapelet(X, individual, min_len, max_len, max_slide=20):
 #    - new_ind2 (np.array)
 
 
-def crossover_AND(ind1, ind2):
+def crossover_AND(ind1, ind2, **kwargs):
     """
     Perform crossover by creating a new individual from the union of two individuals' shapelets,
     ensuring that both parents' shapelets are included in the child.
@@ -262,7 +255,7 @@ def crossover_AND(ind1, ind2):
     )  # Returning child and one parent clone for compatibility with DEAP
 
 
-def crossover_uniform(ind1, ind2):
+def crossover_uniform(ind1, ind2, np_random, **kwargs):
     """
     Perform uniform crossover with a 50% mixing ratio on shapelets.
 
@@ -290,7 +283,7 @@ def crossover_uniform(ind1, ind2):
             shapelet1 = None
             shapelet2 = ind2[i]
 
-        if np.random.rand() < 0.5:
+        if np_random.rand() < 0.5:
             if shapelet1 is not None:
                 new_ind1.append(shapelet1)
             if shapelet2 is not None:
