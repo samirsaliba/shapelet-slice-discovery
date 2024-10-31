@@ -5,6 +5,7 @@ import torch.multiprocessing as mp
 import numpy as np
 import pandas as pd
 import pickle
+import random
 from sklearn.base import BaseEstimator, TransformerMixin
 import time
 import torch
@@ -22,7 +23,6 @@ from .operators import (
     crossover_AND,
     crossover_uniform,
     add_shapelet,
-    remove_shapelet,
     replace_shapelet,
     smooth_shapelet,
 )
@@ -124,7 +124,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             cache=self.cache,
             device=self.device,
         )
-        fit = self.subgroup_search(D=D, y=self.y, shaps=ind, L=L)
+        fit = self.subgroup_search(D=D, y=self.y, shaps=ind)
         ind.register_op("eval")
         ind.fitness.values = fit["value"]
         ind.valid = fit["valid"]
@@ -132,7 +132,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         ind.subgroup_size = fit["subgroup_size"]
         ind.thresholds = fit["thresholds"]
         ind.info = fit["info"]
-        return fit
+
+        return ind
 
     def _mutate_individual(self, ind):
         """Mutate an individual"""
@@ -196,9 +197,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             "info": None,
             "shapelets": [],
         }
-        pop = toolbox.population(n=self.population_size)
-        fitnesses = list(toolbox.map(toolbox.evaluate, pop))
-        return pop
+        return list(
+            toolbox.map(toolbox.evaluate, toolbox.population(n=self.population_size))
+        )
 
     def fit(self, X, y):
         """Extract shapelets from the provided timeseries and labels.
@@ -213,7 +214,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             The target values.
         """
         random_arr = self.np_random.integers(0, 100, size=10)
-        logging.info(f"Random seed ({self.random_seed}) np check: {random_arr}")
+        logging.info(f"Random seed ({self.random_seed})")
+        logging.info(f"np:{random_arr} random:{random.sample(range(1, 50), 7)}")
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logging.info(f"Using torch:{self.device}")
@@ -239,7 +241,6 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         toolbox.register("clone", copy.deepcopy)
 
         if self.n_jobs > 1:
-            raise NotImplementedError
             pool = mp.Pool(self.n_jobs)
             torch.multiprocessing.set_sharing_strategy("file_system")
             toolbox.register("map", pool.map)

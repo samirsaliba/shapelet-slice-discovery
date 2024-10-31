@@ -25,10 +25,10 @@ from gendis.SubgroupSearch import SubgroupSearch
 from gendis.TopKSubgroups import TopKSubgroups
 from gendis.visualization import (
     plot_best_matching_shaps,
+    plot_coverage_heatmap,
     plot_error_distributions,
     plot_shaps,
 )
-
 
 from util import parse_args, save_json, setup_logging
 
@@ -121,8 +121,8 @@ def main():
 
     gendis_args = {
         "population_size": 200,
-        "iterations": 300,
-        "mutation_prob": 0.4,
+        "iterations": 400,
+        "mutation_prob": 0.5,
         "crossover_prob": 0,
         "max_shaps": 2,
         "wait": 80,
@@ -150,8 +150,7 @@ def main():
     t1 = time.time()
 
     # Log results
-    logging.info(f"Finished training, it={gendis.it}, time={t1-t0}")
-    logging.info("\n\n\n")
+    logging.info(f"Finished training, it={gendis.it}, time={t1-t0}\n\n\n")
     logging.info("Best individual stats")
     logging.info(gendis.best["info"])
     save_json(gendis.best["info"], join(results_folder, "best_info.json"))
@@ -173,6 +172,8 @@ def main():
         {"coverage": gendis.top_k.coverage},
         join(results_folder, "topk_coverage.json"),
     )
+    img_path = join(results_folder, f"coverage_heatmap.png")
+    plot_coverage_heatmap(gendis.top_k.coverage, img_path, cmap="YlGnBu")
 
     # Plot best matching shapelets
     for i, individual in enumerate(gendis.top_k.subgroups):

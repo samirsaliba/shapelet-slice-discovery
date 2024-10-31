@@ -137,7 +137,7 @@ class TopKSubgroups:
         if not np.array_equal(coverage, self.coverage):
             self.last_update = it
 
-        self.coverage = coverage
+        self.coverage = coverage - 1
         self.subgroups = new_top_k
         self.ids = new_ids
 

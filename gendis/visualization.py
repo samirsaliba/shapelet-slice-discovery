@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 from .processing import undifferentiate_series
 
 
@@ -107,6 +108,23 @@ def plot_best_matching_shaps(X, distances, subgroup, individual, img_path=None):
     plt.xticks(np.arange(0, len(timeseries) + 1, 30.0))
     plt.tight_layout()
 
+    if img_path is not None:
+        plt.savefig(img_path)
+    else:
+        plt.show()
+
+
+def plot_coverage_heatmap(coverage, img_path=None, rows=20, cmap="YlGnBu"):
+    num_instances = len(coverage)
+    cols = num_instances // rows
+    coverage_matrix = np.reshape(coverage, (rows, cols))
+
+    plt.figure(figsize=(15, 8))
+    sns.heatmap(coverage_matrix, annot=False, cmap=cmap, cbar=True)
+
+    plt.xlabel("Instance Index (per row)")
+    plt.ylabel("Individual Row")
+    plt.title("Coverage Matrix for Instances by Top-k Individuals")
     if img_path is not None:
         plt.savefig(img_path)
     else:

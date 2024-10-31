@@ -22,8 +22,8 @@ class SubgroupSearch:
         self.random_seed = random_seed
         self.np_random = np.random.default_rng(random_seed)
 
-    def __call__(self, D, y, shaps, L=None):
-        return self.evaluate(D, y, shapelets=shaps, L=L)
+    def __call__(self, D, y, shaps):
+        return self.evaluate(D, y, shapelets=shaps)
 
     def subgroup_size_factor(self, subgroup_n, y_n):
         """Score that favors larger subgroups"""
@@ -193,7 +193,7 @@ class SubgroupSearch:
 
         return np.all(subgroups, axis=0)
 
-    def evaluate(self, D, y, shapelets, L=None):
+    def evaluate(self, D, y, shapelets):
         subgroup, thresholds = self.fit(shapelets, D, y)
         subgroup_y = y[subgroup]
         subgroup_n = np.sum(subgroup)
