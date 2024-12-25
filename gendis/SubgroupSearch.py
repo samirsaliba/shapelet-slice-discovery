@@ -1,4 +1,5 @@
 import numpy as np
+from operator import itemgetter
 from scipy.stats import wasserstein_distance, mannwhitneyu
 from .LRUCache import LRUCache
 
@@ -6,21 +7,37 @@ from .LRUCache import LRUCache
 class SubgroupSearch:
     """TODO"""
 
+    threshold_options = ["simulated_annealing", "percentile"]
+
     def __init__(
         self,
         distance_function,
+        threshold_search_mode,
         sg_size_beta,
         max_it=100,
+        threshold_kappa=0.75,
         cache_size=4096,
         random_seed=None,
     ):
-        self.alpha = 0.5
-        self.cache = LRUCache(cache_size)
-        self.sg_size_beta = sg_size_beta
         self.distance_function = distance_function
+
+        assert (
+            threshold_search_mode in self.threshold_options
+        ), f"Threshold mode not implemented. Available modes {self.threshold_options}"
+
+        if threshold_search_mode == "simulated_annealing":
+            self.threshold_search_function = self.simulated_annealing_search
+
+        elif threshold_search_mode == "percentile":
+            self.threshold_search_function = self.percentile_search
+
+        self.sg_size_beta = sg_size_beta
         self.max_it = max_it
+        self.kappa = threshold_kappa
         self.random_seed = random_seed
         self.np_random = np.random.default_rng(random_seed)
+
+        self.cache = LRUCache(cache_size)
 
     def __call__(self, D, y, shaps):
         return self.evaluate(D, y, shapelets=shaps)
@@ -71,16 +88,35 @@ class SubgroupSearch:
         # Compute the fitness (e.g., based on distribution delta and size factor)
         distribution_delta = self.distance_function(subgroup_y, y)
         sizeW = self.subgroup_size_factor(len(subgroup_y), len(y))
-        shap_distance_factor = np.median(dists[subgroup])
+        shap_distance_factor = np.median(dists[subgroup]) / np.median(dists)
 
         fitness = (
-            self.alpha * (distribution_delta * sizeW)
-            - (1 - self.alpha) * shap_distance_factor
+            self.kappa * (distribution_delta * sizeW)
+            - (1 - self.kappa) * shap_distance_factor
         )
 
         return fitness
 
-    def get_optimal_threshold_shapelet(self, shapelet, distances, y):
+    def percentile_search(self, shapelet, distances, y):
+        if self.cache:
+            cache_threshold = self.cache.get(shapelet.id)
+            if cache_threshold is not None:
+                return cache_threshold
+
+        percentiles = np.percentile(distances, np.arange(0, 100))
+
+        fitness_func = lambda threshold: self.compute_fitness_for_shapelet(
+            distances, y, threshold
+        )
+        fitnesses = list(map(fitness_func, percentiles))
+        index, fitness = max(enumerate(fitnesses), key=itemgetter(1))
+        best_threshold = percentiles[index]
+
+        if self.cache:
+            self.cache.set(shapelet.id, best_threshold)
+        return best_threshold
+
+    def simulated_annealing_search(self, shapelet, distances, y):
         """
         Compute the optimal threshold for a given shapelet using multiple runs of Simulated Annealing.
         """
@@ -165,7 +201,7 @@ class SubgroupSearch:
         return global_best_threshold
 
     def get_shapelet_subgroup(self, shap, distances, y):
-        threshold = self.get_optimal_threshold_shapelet(shap, distances, y)
+        threshold = self.threshold_search_function(shap, distances, y)
         shap.threshold = threshold
         subgroup = self.get_threshold_filter(distances, threshold)
 
@@ -230,6 +266,36 @@ class SubgroupSearch:
                 "thresholds": thresholds,
             },
         }
+
+    @staticmethod
+    def compile_pop_stats(pop, it, run_id=None):
+        fitnesses = []
+        sizes = []
+        target_distribution_shift_values = []
+
+        for ind in pop:
+            fitnesses.append(ind.fitness.values[0])
+            sizes.append(ind.subgroup_size)
+            target_distribution_shift_values.append(ind.info["distribution_delta"])
+
+        stats = {
+            "run_id": run_id,
+            "it": it,
+            "fitness_mean": np.mean(fitnesses),
+            "fitness_std": np.std(fitnesses),
+            "fitness_max": np.max(fitnesses),
+            "fitness_min": np.min(fitnesses),
+            "size_mean": np.mean(sizes),
+            "size_std": np.std(sizes),
+            "size_max": np.max(sizes),
+            "size_min": np.min(sizes),
+            "target_distribution_mean": np.mean(target_distribution_shift_values),
+            "target_distribution_std": np.std(target_distribution_shift_values),
+            "target_distribution_max": np.max(target_distribution_shift_values),
+            "target_distribution_min": np.min(target_distribution_shift_values),
+        }
+
+        return stats
 
     @staticmethod
     def wasserstein_distance(y1, y2):

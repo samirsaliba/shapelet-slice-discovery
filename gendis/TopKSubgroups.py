@@ -2,6 +2,7 @@ import copy
 from functools import partial
 import logging
 import numpy as np
+from .SubgroupSearch import SubgroupSearch
 
 
 class TopKSubgroups:
@@ -17,7 +18,7 @@ class TopKSubgroups:
         ids (set): A set of unique identifiers for individuals in the top-k subgroups.
     """
 
-    def __init__(self, k, coverage_alpha):
+    def __init__(self, k, coverage_alpha, run_id=None):
         """
         Initializes the TopKSubgroups object with parameters to maintain the top-k population.
 
@@ -31,6 +32,8 @@ class TopKSubgroups:
         self.coverage = None
         self.ids = None
         self.last_update = 1
+        self.stats_history = []
+        self.run_id = run_id
 
     def _update_coverage(self, subgroup, coverage):
         """
@@ -73,7 +76,6 @@ class TopKSubgroups:
         """
         coverage = np.ones(length_input)
         weights = np.power([self.coverage_alpha], coverage)
-        # pop = list(map(copy.deepcopy, pop))
 
         if self.subgroups is None:
             pop_star = pop
@@ -87,16 +89,12 @@ class TopKSubgroups:
         new_top_k = [best]
         new_ids = set([best.uuid])
 
-        k = 0
+        k = 1
         while k < self.k:
             weights, coverage = self._update_coverage(best.subgroup, coverage)
 
             fitness_values = []
             coverage_factors = []
-
-            # for ind in pop_star:
-            #     fitness_values.append(ind.fitness.values[0])
-            #     coverage_factors.append(self._coverage_factor(weights, ind.subgroup))
 
             fitness_values, subgroups = zip(
                 *[(x.fitness.values[0], x.subgroup) for x in pop_star]
@@ -140,6 +138,11 @@ class TopKSubgroups:
         self.coverage = coverage - 1
         self.subgroups = new_top_k
         self.ids = new_ids
+        self.compile_stats(it)
+
+    def compile_stats(self, it):
+        stats = SubgroupSearch.compile_pop_stats(self.subgroups, it, run_id=self.run_id)
+        self.stats_history.append(stats)
 
     def to_dict(self):
         """

@@ -9,24 +9,26 @@ import random
 from sklearn.model_selection import ShuffleSplit
 import time
 
+from gendis.processing import preprocess_input
 
-from gendis.operators import (
+from gendis.crossover import point_crossover
+from gendis.mutation import (
     add_shapelet,
     mask_shapelet,
     replace_shapelet,
     slide_shapelet,
     smooth_shapelet,
 )
-from gendis.operators import crossover_AND
-from gendis.processing import preprocess_input
 
 from gendis.genetic import GeneticExtractor
 from gendis.SubgroupSearch import SubgroupSearch
 from gendis.TopKSubgroups import TopKSubgroups
+
+from gendis.evaluation import class_predominance, evaluate_subgroup, precision, recall
 from gendis.visualization import (
     plot_best_matching_shaps,
     plot_coverage_heatmap,
-    plot_error_distributions,
+    plot_target_histogram,
     plot_shaps,
 )
 
@@ -58,19 +60,23 @@ def main():
     logging.info(df.label.value_counts().to_dict())
 
     img_path = join(results_folder, "error_dist.png")
-    plot_error_distributions(df, img_path)
+    plot_target_histogram(df, label_col="label", target_col="error", img_path=img_path)
 
-    try:
-        X = df.drop(columns=["pattern_x0", "pattern_x1", "pattern_y", "error", "label"])
-    except:
-        X = df.drop(columns=["error", "label"]).values
+    labels = df["label"]
+
+    X = df.drop(
+        columns=[
+            "pattern_x0",
+            "pattern_x1",
+            "pattern_y",
+            "error",
+            "label",
+            "predicted",
+        ],
+        errors="ignore",
+    ).values
+
     y = df["error"]
-
-    # sss = ShuffleSplit(n_splits=1, test_size=0.1, random_state=0)
-    # sss.get_n_splits(X, y)
-    # train_index, test_index = next(sss.split(X, y))
-    # X_train, y_train = X.iloc[train_index], y.iloc[train_index]
-    # X_test, y_test = X.iloc[test_index], y.iloc[test_index]
 
     X_train, y_train = X, y
 
@@ -80,7 +86,9 @@ def main():
     K = 10
     COVERAGE_ALPHA = 0.5
     SUBGROUP_SIZE_BETA = 0.5
-    THRESHOLD_MAX_IT = 300
+    THRESHOLD_MAX_IT = 400
+    THRESHOLD_KAPPA = 0.9
+    SEARCH_MODE = "percentile"
     subgroup_args = {
         "K": K,
         "coverage_alpha": COVERAGE_ALPHA,
@@ -88,6 +96,8 @@ def main():
         "cache_size": CACHE_SIZE,
         "random_seed": RANDOM_SEED_VAL,
         "max_it": THRESHOLD_MAX_IT,
+        "threshold_kappa": THRESHOLD_KAPPA,
+        "threshold_search_mode": SEARCH_MODE,
     }
 
     logging.info("Parameters TopKSubgroups and SubgroupDistance")
@@ -95,6 +105,8 @@ def main():
 
     subgroup_search = SubgroupSearch(
         distance_function=SubgroupSearch.simple_mean,
+        threshold_search_mode=SEARCH_MODE,
+        threshold_kappa=THRESHOLD_KAPPA,
         sg_size_beta=SUBGROUP_SIZE_BETA,
         max_it=THRESHOLD_MAX_IT,
         cache_size=CACHE_SIZE,
@@ -107,10 +119,10 @@ def main():
         add_shapelet,
         mask_shapelet,
         replace_shapelet,
-        # slide_shapelet,
+        slide_shapelet,
         # smooth_shapelet,
     ]
-    cx_ops = []
+    cx_ops = [point_crossover]
 
     funcs = {
         "top_k": top_k,
@@ -121,12 +133,12 @@ def main():
 
     gendis_args = {
         "population_size": 200,
-        "iterations": 400,
+        "iterations": 200,
         "mutation_prob": 0.5,
         "crossover_prob": 0,
         "max_shaps": 2,
-        "wait": 80,
-        "pop_restarts": 3,
+        "wait": 50,
+        "pop_restarts": 5,
         "min_len": 15,
         "max_len": 40,
         "n_jobs": 1,  # multiprocessing.cpu_count() - 3,
@@ -136,10 +148,6 @@ def main():
     }
     logging.info("Parameters Gendis")
     logging.info(gendis_args)
-    save_json(
-        {**gendis_args, **subgroup_args},
-        join(results_folder, "parameters.json"),
-    )
 
     # Preprocess and model fit
     args = {**gendis_args, **funcs}
@@ -149,6 +157,11 @@ def main():
     gendis.fit(X_input, y_input)
     t1 = time.time()
 
+    save_json(
+        {**gendis_args, **subgroup_args, "training_time": round(t1 - t0)},
+        join(results_folder, "run_info.json"),
+    )
+
     # Log results
     logging.info(f"Finished training, it={gendis.it}, time={t1-t0}\n\n\n")
     logging.info("Best individual stats")
@@ -157,10 +170,10 @@ def main():
 
     logging.info("Top-K info")
     topk_info = []
-    for ind in gendis.top_k.subgroups:
-        data = ind.info
-        data["coverage_weight"] = ind.coverage_weight
-        data["subgroup_indexes"] = np.where(ind.subgroup)
+    for individual in gendis.top_k.subgroups:
+        data = individual.info
+        data["coverage_weight"] = individual.coverage_weight
+        # data["subgroup_indexes"] = np.where(individual.subgroup)
         topk_info.append(data)
     logging.info(topk_info)
     save_json(topk_info, join(results_folder, "topk_info.json"))
@@ -173,19 +186,45 @@ def main():
         join(results_folder, "topk_coverage.json"),
     )
     img_path = join(results_folder, f"coverage_heatmap.png")
-    plot_coverage_heatmap(gendis.top_k.coverage, img_path, cmap="YlGnBu")
+    plot_coverage_heatmap(gendis.top_k.subgroups, img_path=img_path, cmap="YlGnBu")
 
-    # Plot best matching shapelets
+    topk_classes = []
+    topk_metrics = []
+
     for i, individual in enumerate(gendis.top_k.subgroups):
-        img_path = join(results_folder, f"shapelets_matching_plots_top_{i}.png")
         distances, subgroup = gendis.transform(
             X_input, shapelets=individual, thresholds=individual.thresholds
         )
+        img_path = join(results_folder, f"sg_{i}_top_members.png")
         plot_best_matching_shaps(
             X_train, distances, subgroup, individual, img_path=img_path
         )
 
-    gendis.save(join(results_folder, "gendis.pickle"))
+        predominant_class = class_predominance(subgroup, labels=labels, n=1)
+
+        ind_class = {
+            "top_k_subgroup": i,
+            "class": predominant_class.index[0],
+            "proportion": predominant_class.values[0],
+        }
+        topk_classes.append(ind_class)
+
+        metrics = evaluate_subgroup(subgroup, labels=labels)
+        for metric in metrics:
+            metric["top_k_subgroup"] = i
+
+        topk_metrics.extend(metrics)
+
+        # img_path = join(results_folder, f"shaps_{i}.png")
+        # plot_shaps(individual, img_path=img_path)
+
+    classes_df = pd.DataFrame(topk_classes)
+    metrics_df = pd.DataFrame(topk_metrics)
+
+    classes_df.to_csv(join(results_folder, f"topk_classes.csv"))
+    metrics_df.to_csv(join(results_folder, f"topk_classes_metrics.csv"))
+
+    # gendis.save(join(results_folder, "gendis.pickle"))
 
 
 if __name__ == "__main__":

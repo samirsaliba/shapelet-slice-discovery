@@ -1,51 +1,12 @@
 import numpy as np
-from .individual import Shapelet, ShapeletIndividual
+from .initialization import random_shapelet
+from .individual import Shapelet
 import torch
 from torch.nn import functional as F
-from tslearn.clustering import TimeSeriesKMeans
-
-##########################################################################
-#                       Initialization operators                         #
-##########################################################################
-# Interface
-# ---------
-# INPUT:
-#    - X (np.array)
-#    - n_shapelets (int)
-# OUTPUT:
-#    - shapelets (np.array)
-
-
-def random_shapelet(X, n_shapelets, min_len, max_len, np_random):
-    """Extract random subseries from the training set"""
-    shapelets = []
-    m = len(X[0])
-    for _ in range(n_shapelets):
-        row = np_random.integers(X.shape[0])
-        length = np_random.integers(min_len, max_len)
-        col = np_random.integers(0, m - length)
-        shap_series = X[row][col : col + length]
-        shapelet = Shapelet(shap_series, index=row, start=col)
-        shapelets.append(shapelet)
-
-    return shapelets
-
-
-##########################################################################
-#                         Mutatation operators                           #
-##########################################################################
-# Interface
-# ---------
-# INPUT:
-#    - shapelets (np.array)
-# OUTPUT:
-#    - new_shapelets (np.array)
 
 
 def smooth_shapelet(individual, np_random, device="cuda", **kwargs):
     """Smooth a random shapelet using PyTorch"""
-    # TODO
-    # raise NotImplementedError
     # Choose a random shapelet in the individual
     rand_shapelet = np_random.integers(len(individual))
     shap = individual[rand_shapelet]
@@ -68,13 +29,9 @@ def smooth_shapelet(individual, np_random, device="cuda", **kwargs):
             [shap_smoothed, torch.full((padding_size,), fill_value, device=device)]
         )
 
-    # Update the shapelet and reset its ID
-    individual[rand_shapelet] = Shapelet(
-        shap_smoothed.cpu().numpy(), index=shap.index, start=shap.start
-    )
-    individual[rand_shapelet]
-    individual.register_op("smooth")
-    individual.reset()
+    new_shap = Shapelet(shap_smoothed.cpu().numpy(), index=shap.index, start=shap.start)
+    individual[rand_shapelet] = new_shap
+    individual[rand_shapelet].register_op("smooth")
 
     return individual
 
@@ -92,8 +49,6 @@ def remove_shapelet(individual, np_random, remove_last=False):
     rand_shapelet = np_random.integers(len(individual))
 
     individual.pop(rand_shapelet)
-    individual.reset()
-
     return individual
 
 
@@ -156,11 +111,10 @@ def add_shapelet(X, individual, min_len, max_len, np_random):
         )
         return individual
 
-    if not hasattr(individual, "subgroup"):
-        return individual
-
-    individual.reset()
-    index = individual[-1].index  # np_random.choice(np.where(individual.subgroup)[0])
+    if individual.subgroup is not None:
+        index = np_random.choice(np.where(individual.subgroup)[0])
+    else:
+        index = individual[-1].index
 
     # Get the total length of the time series
     time_series_length = X.shape[1]
@@ -176,7 +130,7 @@ def add_shapelet(X, individual, min_len, max_len, np_random):
     return individual
 
 
-def slide_shapelet(X, individual, max_slide=20, **kwargs):
+def slide_shapelet(X, individual, np_random, max_slide=20, **kwargs):
     """Slide a random shapelet forwards or backwards within the X data.
 
     Args:
@@ -187,11 +141,6 @@ def slide_shapelet(X, individual, max_slide=20, **kwargs):
     Returns:
         shapelets (list): The modified list of Shapelet objects.
     """
-    # TODO
-    raise NotImplementedError
-
-    individual.reset()
-
     rand_shapelet_idx = np_random.integers(len(individual))
     shapelet = individual[rand_shapelet_idx]
 
@@ -217,81 +166,3 @@ def slide_shapelet(X, individual, max_slide=20, **kwargs):
     )
 
     return individual
-
-
-##########################################################################
-#                         Crossover operators                            #
-##########################################################################
-# Interface
-# ---------
-# INPUT:
-#    - ind1 (np.array)
-#    - ind2 (np.array)
-# OUTPUT:
-#    - new_ind1 (np.array)
-#    - new_ind2 (np.array)
-
-
-def crossover_AND(ind1, ind2, **kwargs):
-    """
-    Perform crossover by creating a new individual from the union of two individuals' shapelets,
-    ensuring that both parents' shapelets are included in the child.
-
-    Parameters:
-    ind1 (ShapeletIndividual): First parent individual
-    ind2 (ShapeletIndividual): Second parent individual
-
-    Returns:
-    child1 (ShapeletIndividual): New individual created from the union of ind1 and ind2 shapelets
-    child2 (ShapeletIndividual): New individual (clone of ind1) to preserve DEAP operator interface
-    """
-    # Create a new individual containing shapelets from both parents
-    new_shapelets = list(ind1) + list(ind2)
-    child = ShapeletIndividual(list(new_shapelets))
-
-    return (
-        child,
-        ind1,
-    )  # Returning child and one parent clone for compatibility with DEAP
-
-
-def crossover_uniform(ind1, ind2, np_random, **kwargs):
-    """
-    Perform uniform crossover with a 50% mixing ratio on shapelets.
-
-    Parameters:
-    ind1 (list of lists): First parent individual
-    ind2 (list of lists): Second parent individual
-
-    Returns:
-    new_ind1 (list of lists): First new individual created by uniform crossover
-    new_ind2 (list of lists): Second new individual created by uniform crossover
-    """
-    max_length = max(len(ind1), len(ind2))
-
-    new_ind1 = []
-    new_ind2 = []
-
-    for i in range(max_length):
-        if i < len(ind1) and i < len(ind2):
-            shapelet1 = ind1[i]
-            shapelet2 = ind2[i]
-        elif i < len(ind1):
-            shapelet1 = ind1[i]
-            shapelet2 = None
-        else:
-            shapelet1 = None
-            shapelet2 = ind2[i]
-
-        if np_random.rand() < 0.5:
-            if shapelet1 is not None:
-                new_ind1.append(shapelet1)
-            if shapelet2 is not None:
-                new_ind2.append(shapelet2)
-        else:
-            if shapelet2 is not None:
-                new_ind1.append(shapelet2)
-            if shapelet1 is not None:
-                new_ind2.append(shapelet1)
-
-    return new_ind1, new_ind2

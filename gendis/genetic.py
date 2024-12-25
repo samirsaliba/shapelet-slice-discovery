@@ -16,17 +16,18 @@ mp.set_start_method("spawn", force=True)
 
 warnings.filterwarnings("ignore")
 
-from .individual import ShapeletIndividual
 from .LRUCache import LRUCache
-from .operators import (
+
+from .crossover import point_crossover
+from .mutation import (
     random_shapelet,
-    crossover_AND,
-    crossover_uniform,
     add_shapelet,
     replace_shapelet,
     smooth_shapelet,
 )
+from .individual import ShapeletIndividual
 from .shapelets_distances import calculate_shapelet_dist_matrix
+from .SubgroupSearch import SubgroupSearch
 
 
 class GeneticExtractor(BaseEstimator, TransformerMixin):
@@ -51,12 +52,14 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         max_len=None,
         min_len=0,
         init_ops=[random_shapelet],
-        cx_ops=[crossover_AND, crossover_uniform],
+        cx_ops=[point_crossover],
         mut_ops=[add_shapelet, smooth_shapelet],
-        cache_size=4096,
+        cache_size=8192,
         n_jobs=1,
         verbose=False,
         random_seed=None,
+        log_each_it=10,
+        run_id=None,
     ):
         self.subgroup_search = subgroup_search
         self.top_k = top_k
@@ -81,28 +84,12 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.np_random = np.random.default_rng(random_seed)
 
         # Attributes
+        self.log_each_it = log_each_it
+        self.run_id = run_id
         self.is_fitted = False
-        self.label_mapping = {}
-        self.should_reset_pop = False
+        self.should_restart_pop = False
         self.pop_restart_counter = 0
         self.plot = False
-
-    def _print_statistics(self, stats, start):
-        if self.it == 1:
-            # Print the header of the statistics
-            print("it\t\tavg\t\tstd\t\tmax\t\ttime")
-            # print('it\t\tavg\t\tmax\t\ttime')
-
-        print(
-            "{}\t\t{}\t\t{}\t\t{}\t{}".format(
-                # print('{}\t\t{}\t\t{}\t{}'.format(
-                self.it,
-                np.around(stats["avg"], 4),
-                np.around(stats["std"], 3),
-                np.around(stats["max"], 6),
-                np.around(time.time() - start, 4),
-            )
-        )
 
     def _create_individual(self, n_shapelets=None):
         """Generate a random shapelet set"""
@@ -118,7 +105,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
     def _eval_individual(self, ind):
         """Evaluate the fitness of an individual"""
-        D, L = calculate_shapelet_dist_matrix(
+        D, _ = calculate_shapelet_dist_matrix(
             self.X_tensor,
             ind,
             cache=self.cache,
@@ -149,31 +136,40 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             ) or clone.subgroup_size == 1:
                 mut_op = replace_shapelet
 
-            return mut_op(
+            elif len(clone) > 1 and mut_op.__name__ in [
+                "mask_shapelet",
+                "smooth_shapelet",
+                "slide_shapelet",
+            ]:
+                # These operations are not safe for individuals with > 1 shapelet
+                # As they can cause invalid individuals (coverage == 0)
+                mut_op = replace_shapelet
+
+            ind = mut_op(
                 X=self.X,
                 individual=clone,
                 min_len=self.min_len,
                 max_len=self.max_len,
                 np_random=self.np_random,
             )
+            ind.register_op(mut_op.__name__)
+            ind.reset()
+            return ind
+
         return ind
 
-    def _cross_individuals(self, ind1, ind2, toolbox):
+    def _cross_individuals(self, ind1, ind2):
         """Cross two individuals"""
         if self.np_random.random() < self.crossover_prob:
-            ind1_clone = toolbox.clone(ind1)
-            ind2_clone = toolbox.clone(ind2)
-
-            cx_op = self.np_random.choice(self.deap_cx_ops)
-            child1, _ = cx_op(
-                ind1=ind1_clone, ind2=ind2_clone, np_random=self.np_random
+            cx_op = self.np_random.choice(self.cx_ops)
+            child1, child2 = cx_op(
+                parent1=ind1, parent2=ind2, X=self.X, np_random=self.np_random
             )
-            child1.uuid_history.append(ind1_clone.uuid)
-            child1.register_op("cx-child")
-            ind1_clone.register_op("cx-parent")
-
-            return child1, ind1_clone
-
+            child1.reset()
+            child1.register_op("cx-child1")
+            child2.reset()
+            child2.register_op("cx-child2")
+            return child1, child2
         return ind1, ind2
 
     def _check_early_stopping(self):
@@ -181,25 +177,10 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             if self.pop_restart_counter < self.pop_restarts:
                 # Will trigger population reset
                 self.top_k.last_update = self.it
-                self.should_reset_pop = True
+                self.should_restart_pop = True
             else:
                 return True
         return False
-
-    def _create_pop(self, toolbox):
-        # Initialize the population and calculate their initial fitness values
-        self.should_reset_pop = False
-        self.pop_restart_counter += 1
-
-        self.best = {
-            "it": self.it,
-            "score": float("-inf"),
-            "info": None,
-            "shapelets": [],
-        }
-        return list(
-            toolbox.map(toolbox.evaluate, toolbox.population(n=self.population_size))
-        )
 
     def fit(self, X, y):
         """Extract shapelets from the provided timeseries and labels.
@@ -214,11 +195,13 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             The target values.
         """
         random_arr = self.np_random.integers(0, 100, size=10)
-        logging.info(f"Random seed ({self.random_seed})")
-        logging.info(f"np:{random_arr} random:{random.sample(range(1, 50), 7)}")
+        if self.verbose:
+            logging.info(f"Random seed ({self.random_seed})")
+            logging.info(f"np:{random_arr} random:{random.sample(range(1, 50), 7)}")
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        logging.info(f"Using torch:{self.device}")
+        if self.verbose:
+            logging.info(f"Using torch:{self.device}")
 
         self.X = X
         self.X_tensor = torch.tensor(X, dtype=torch.float32, device=self.device)
@@ -238,7 +221,6 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
 
         # Register all operations in the toolbox
         toolbox = base.Toolbox()
-        toolbox.register("clone", copy.deepcopy)
 
         if self.n_jobs > 1:
             pool = mp.Pool(self.n_jobs)
@@ -248,80 +230,87 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         else:
             toolbox.register("map", map)
 
-        self.deap_cx_ops = []
-        for i, cx_op in enumerate(self.cx_ops):
-            toolbox.register(f"cx{i}", cx_op)
-            self.deap_cx_ops.append(getattr(toolbox, (f"cx{i}")))
-
-        self.deap_mut_ops = []
-        for i, mut_op in enumerate(self.mut_ops):
-            toolbox.register(f"mutate{i}", mut_op)
-            self.deap_mut_ops.append(getattr(toolbox, (f"mutate{i}")))
-
         toolbox.register("create", self._create_individual)
         toolbox.register(
             "individual", tools.initIterate, creator.Individual, toolbox.create
         )
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)
         toolbox.register("evaluate", self._eval_individual)
-        # Small tournaments to ensure diversity
+        toolbox.register("mutate", self._mutate_individual)
+        toolbox.register("crossover", self._cross_individuals)
         toolbox.register("select", tools.selTournament, tournsize=2)
 
-        # Set up the statistics. We will measure the mean, std dev and max
-        stats = tools.Statistics(key=lambda ind: ind.fitness.values[0])
-        stats.register("avg", np.mean)
-        stats.register("std", np.std)
-        stats.register("max", np.max)
-        stats.register("min", np.min)
+        self.best = {
+            "it": -1,
+            "score": float("-inf"),
+            "info": None,
+            "shapelets": [],
+        }
 
         self.it = 1
-        pop = self._create_pop(toolbox)
+        pop = list(
+            toolbox.map(toolbox.evaluate, toolbox.population(n=self.population_size))
+        )
 
         # The genetic algorithm starts here
         it_start = time.time()
         while self.it <= self.iterations:
-            logging.info(f"it:{self.it}, it_time: {(time.time() - it_start):.2f}s")
+            if self.verbose and (self.it % self.log_each_it == 0):
+                logging.info(
+                    f"it:{self.it}, it_time: {(time.time() - it_start):.2f}s, topk.last_update: {self.top_k.last_update}"
+                )
+                logging.info(f"Best ind: {best.uuid} covers {sum(best.subgroup)}")
             it_start = time.time()
 
             # Early stopping and pop reset
             if self._check_early_stopping():
                 break
 
-            if self.should_reset_pop:
+            if self.should_restart_pop:
                 logging.info(
                     f"Restarting pop {self.pop_restart_counter+1}/{self.pop_restarts}"
                 )
-                pop = self._create_pop(toolbox)
+                self.should_restart_pop = False
+                self.pop_restart_counter += 1
+                pop = list(
+                    toolbox.map(
+                        toolbox.evaluate, toolbox.population(n=self.population_size)
+                    )
+                )
 
             # Elitism
             elit_n = 1
             elitism_individuals = [toolbox.clone(x) for x in tools.selBest(pop, elit_n)]
-            offspring = pop
+
+            # Selection
+            selected = toolbox.select(pop, len(pop))
 
             # Crossover
-            if len(self.deap_cx_ops) > 0:
-                for child1, child2 in zip(offspring[::2], offspring[1::2]):
-                    self._cross_individuals(child1, child2, toolbox)
+            if len(self.cx_ops) > 0:
+                offspring = []
+                for parent1, parent2 in zip(selected[::2], selected[1::2]):
+                    child1, child2 = toolbox.crossover(parent1, parent2)
+                    offspring.extend([child1, child2])
+            else:
+                offspring = selected  # No crossover, use selected individuals as is
 
             # Mutation
-            if len(self.deap_mut_ops) > 0:
-                offspring = list(toolbox.map(self._mutate_individual, offspring))
+            if len(self.mut_ops) > 0:
+                offspring = list(toolbox.map(toolbox.mutate, offspring))
 
             invalid = [ind for ind in offspring if not ind.valid]
             _ = list(toolbox.map(toolbox.evaluate, invalid))
 
             # Replace population and update hall of fame, statistics & history
-            new_pop = toolbox.select(offspring, self.population_size - elit_n)
-            pop = new_pop + elitism_individuals
-            it_stats = stats.compile(pop)
-            self.history.append([self.it, it_stats])
+            pop = offspring[: self.population_size - elit_n] + elitism_individuals
+            it_stats = SubgroupSearch.compile_pop_stats(
+                pop, it=self.it, run_id=self.run_id
+            )
+            self.history.append(it_stats)
 
             # Have we found a new best score?
-            if it_stats["max"] > self.best["score"]:
-                best = tools.selBest(pop + offspring, 1)[0]
-                logging.info(f"Best ind: {best.info}")
-                logging.info(f"Best ind covers {sum(best.subgroup)} instances")
-
+            if it_stats["fitness_max"] > self.best["score"]:
+                best = tools.selBest(pop, 1)[0]
                 self.best = {
                     "it": self.it,
                     "score": best.fitness.values[0],

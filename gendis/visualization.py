@@ -1,20 +1,46 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import seaborn as sns
 from .processing import undifferentiate_series
 
 
-def plot_error_distributions(df, img_path):
-    for lb in df["label"].value_counts().index:
-        plt.hist(df.loc[df["label"] == lb, "error"], alpha=0.5, label=lb)
+def plot_func(func):
+    def wrapper(*args, **kwargs):
+        img_path = kwargs.pop("img_path", None)
+        func(*args, **kwargs)
+
+        if img_path is not None:
+            plt.savefig(img_path)
+        else:
+            plt.show()
+        plt.clf()
+
+    return wrapper
+
+
+@plot_func
+def plot_target_histogram(df, label_col="label", target_col="error", **kwargs):
+    for lb in df[label_col].value_counts().index:
+        plt.hist(df.loc[df[label_col] == lb, target_col], alpha=0.5, label=lb, **kwargs)
     plt.legend(loc="upper right")
-    if img_path is not None:
-        plt.savefig(img_path)
+
+
+@plot_func
+def plot_target_histogram_per_subgroup(y, subgroup_mask=None, **kwargs):
+    if np.sum(subgroup_mask) <= np.sum(~subgroup_mask):
+        plt.hist(y[~subgroup_mask], alpha=0.5, label="Out of sg.", **kwargs)
+        plt.hist(y[subgroup_mask], alpha=0.5, label="In sg.", **kwargs)
+
     else:
-        plt.show()
+        plt.hist(y[subgroup_mask], alpha=0.5, label="In sg.", **kwargs)
+        plt.hist(y[~subgroup_mask], alpha=0.5, label="Out of sg.", **kwargs)
+
+    plt.legend(loc="upper right")
 
 
-def plot_shaps(shaps, img_path=None, x_label="Time", y_label="Value"):
+@plot_func
+def plot_shaps(shaps, x_label="Time", y_label="Value"):
     """
     Plots multiple shapelets on separate subplots.
 
@@ -55,19 +81,19 @@ def plot_shaps(shaps, img_path=None, x_label="Time", y_label="Value"):
         ax.set_ylabel(y_label)
 
     plt.tight_layout()
-    if img_path is not None:
-        plt.savefig(img_path)
-    else:
-        plt.show()
 
 
-def plot_best_matching_shaps(X, distances, subgroup, individual, img_path=None):
+@plot_func
+def plot_best_matching_shaps(X, distances, subgroup, individual):
     # Filter datasets based on subgroup mask
     X = X.copy()
     distances = distances.copy()
 
-    distances = distances[subgroup]
-    X = X[subgroup]
+    distances = distances.iloc[subgroup]
+    if isinstance(X, pd.DataFrame):
+        X = X.iloc[subgroup]
+    else:
+        X = X[subgroup]
 
     # Create ordering index based on sum of distances
     d_cols = distances.filter(like="D_")
@@ -108,24 +134,15 @@ def plot_best_matching_shaps(X, distances, subgroup, individual, img_path=None):
     plt.xticks(np.arange(0, len(timeseries) + 1, 30.0))
     plt.tight_layout()
 
-    if img_path is not None:
-        plt.savefig(img_path)
-    else:
-        plt.show()
 
-
-def plot_coverage_heatmap(coverage, img_path=None, rows=20, cmap="YlGnBu"):
-    num_instances = len(coverage)
-    cols = num_instances // rows
-    coverage_matrix = np.reshape(coverage, (rows, cols))
+@plot_func
+def plot_coverage_heatmap(top_k, cmap="YlGnBu"):
+    # Extract the boolean mask arrays (subgroups) from each object in top_k
+    coverage_matrix = np.vstack([obj.subgroup for obj in top_k])
 
     plt.figure(figsize=(15, 8))
-    sns.heatmap(coverage_matrix, annot=False, cmap=cmap, cbar=True)
+    sns.heatmap(coverage_matrix.astype(int), annot=False, cmap=cmap, cbar=True)
 
-    plt.xlabel("Instance Index (per row)")
-    plt.ylabel("Individual Row")
+    plt.xlabel("Instance Index")
+    plt.ylabel("Top-k Individuals")
     plt.title("Coverage Matrix for Instances by Top-k Individuals")
-    if img_path is not None:
-        plt.savefig(img_path)
-    else:
-        plt.show()

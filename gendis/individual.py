@@ -37,6 +37,7 @@ class Shapelet(array.array):
 
     def register_op(self, op):
         self.__history.append(op)
+        self.__id += op
 
     def __deepcopy__(self, memo):
         return Shapelet(list(self).copy(), index=self.__index, start=self.__start)
@@ -91,6 +92,7 @@ class ShapeletIndividual(list):
         self.__uuid_history.append(self.__uuid)
         # Generate a new reproducible UUID each time reset is called
         self.__uuid = uuid.UUID(int=rng.getrandbits(128))
+
         del self.fitness.values
 
     def pop_uuid(self):

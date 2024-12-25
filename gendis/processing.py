@@ -10,11 +10,11 @@ def preprocess_input(X, y):
         _X = _X.values
     _X = np.apply_along_axis(lambda s: differencing(s, smooth=None), 1, _X)
 
-    y = copy.deepcopy(y)
-    if isinstance(y, pd.Series):
-        y = y.values
+    _y = copy.deepcopy(y)
+    if isinstance(_y, pd.Series):
+        _y = y.values
 
-    return _X, y
+    return _X, _y
 
 
 def undifferentiate_series(series, offset=0):
