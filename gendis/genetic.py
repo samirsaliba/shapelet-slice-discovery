@@ -1,7 +1,7 @@
 import copy
 from deap import base, creator, tools
 import logging
-import torch.multiprocessing as mp
+import math
 import numpy as np
 import pandas as pd
 import pickle
@@ -9,6 +9,7 @@ import random
 from sklearn.base import BaseEstimator, TransformerMixin
 import time
 import torch
+import torch.multiprocessing as mp
 import warnings
 
 # Ensure 'spawn' start method for compatibility, especially on some systems
@@ -49,8 +50,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         wait=10,
         pop_restarts=5,
         max_shaps=None,
-        max_len=None,
-        min_len=0,
+        min_len=0.1,
+        max_len=0.2,
         init_ops=[random_shapelet],
         cx_ops=[point_crossover],
         mut_ops=[add_shapelet, smooth_shapelet],
@@ -98,8 +99,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         return init_op(
             X=self.X,
             n_shapelets=n_shapelets,
-            max_len=self.max_len,
-            min_len=self.min_len,
+            min_len=self._min_len_int,
+            max_len=self._max_len_int,
             np_random=self.np_random,
         )
 
@@ -148,8 +149,8 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
             ind = mut_op(
                 X=self.X,
                 individual=clone,
-                min_len=self.min_len,
-                max_len=self.max_len,
+                min_len=self._min_len_int,
+                max_len=self._max_len_int,
                 np_random=self.np_random,
             )
             ind.register_op(mut_op.__name__)
@@ -162,6 +163,7 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         """Cross two individuals"""
         if self.np_random.random() < self.crossover_prob:
             cx_op = self.np_random.choice(self.cx_ops)
+            ind1, ind2 = copy.deepcopy(ind1), copy.deepcopy(ind2)
             child1, child2 = cx_op(
                 parent1=ind1, parent2=ind2, X=self.X, np_random=self.np_random
             )
@@ -207,11 +209,9 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.X_tensor = torch.tensor(X, dtype=torch.float32, device=self.device)
         self.y = y
 
-        if self.max_len is None:
-            if len(self.X[0]) > 20:
-                self.max_len = len(self.X[0]) // 2
-            else:
-                self.max_len = len(self.X[0])
+        series_len = X.shape[1]
+        self._min_len_int = math.floor(self.min_len * series_len)
+        self._max_len_int = math.floor(self.max_len * series_len)
 
         self.cache = LRUCache(self.cache_size)
         self.history = []

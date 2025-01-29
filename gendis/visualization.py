@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import math
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -20,10 +21,101 @@ def plot_func(func):
 
 
 @plot_func
-def plot_target_histogram(df, label_col="label", target_col="error", **kwargs):
-    for lb in df[label_col].value_counts().index:
-        plt.hist(df.loc[df[label_col] == lb, target_col], alpha=0.5, label=lb, **kwargs)
+def plot_target_histogram(df, label_col="label", target_col="error", bins=10, **kwargs):
+    # Group data by label
+    labels = df[label_col].unique()  # Unique labels
+    data = [df.loc[df[label_col] == lb, target_col] for lb in labels]
+
+    # Plot histogram with histtype="bar"
+    plt.hist(
+        data, bins=bins, histtype="bar", label=labels, alpha=0.7, range=(0, 1), **kwargs
+    )
+
     plt.legend(loc="upper right")
+    plt.xlabel(target_col)
+    plt.ylabel("Frequency")
+    plt.title(f"Histogram of {target_col} by {label_col}")
+    plt.show()
+
+
+@plot_func
+def _plot_single_batch(
+    batch_data,
+    batch_labels,
+    target_col,
+    label_col,
+    bins,
+    batch_idx,
+    num_batches,
+    **kwargs,
+):
+    """Plot a single batch of histograms."""
+    plt.hist(
+        batch_data,
+        bins=bins,
+        histtype="bar",
+        label=batch_labels,
+        alpha=0.7,
+        range=(0, 1),
+        **kwargs,
+    )
+    plt.legend(loc="upper right")
+    plt.xlabel(target_col)
+    plt.ylabel("Frequency")
+    plt.title(
+        f"Histogram of {target_col} by {label_col} (Batch {batch_idx + 1}/{num_batches})"
+    )
+
+
+def plot_target_histograms_in_batches(
+    df,
+    label_col="label",
+    target_col="error",
+    bins=10,
+    max_labels_per_plot=5,
+    img_path=None,
+    **kwargs,
+):
+    labels = sorted(df[label_col].unique())  # Ensure sequential order
+    num_labels = len(labels)
+
+    if num_labels > max_labels_per_plot:
+        num_batches = math.ceil(num_labels / max_labels_per_plot)
+        for batch_idx in range(num_batches):
+            batch_labels = labels[
+                batch_idx * max_labels_per_plot : (batch_idx + 1) * max_labels_per_plot
+            ]
+            batch_data = [
+                df.loc[df[label_col] == lb, target_col] for lb in batch_labels
+            ]
+
+            # Generate a file path for each batch if saving
+            batch_img_path = (
+                f"{img_path}_batch_{batch_idx + 1}.png" if img_path else None
+            )
+
+            # Plot the batch using the wrapper
+            _plot_single_batch(
+                batch_data,
+                batch_labels=batch_labels,
+                target_col=target_col,
+                label_col=label_col,
+                bins=bins,
+                batch_idx=batch_idx,
+                num_batches=num_batches,
+                img_path=batch_img_path,
+                **kwargs,
+            )
+    else:
+        # Use original function for <= max_labels_per_plot
+        plot_target_histogram(
+            df,
+            label_col=label_col,
+            target_col=target_col,
+            bins=bins,
+            img_path=img_path,
+            **kwargs,
+        )
 
 
 @plot_func

@@ -92,7 +92,7 @@ class ShapeletIndividual(list):
         self.__uuid_history.append(self.__uuid)
         # Generate a new reproducible UUID each time reset is called
         self.__uuid = uuid.UUID(int=rng.getrandbits(128))
-
+        self.subgroup = None
         del self.fitness.values
 
     def pop_uuid(self):

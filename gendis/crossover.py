@@ -13,68 +13,32 @@ def point_crossover(parent1, parent2, X, np_random):
     Returns:
         Tuple containing two new ShapeletIndividuals (child1, child2).
     """
-    # Single-shapelet crossover case
-    if len(parent1) == 1 and len(parent2) == 1:
-        shap_a = parent1[0]
-        shap_b = parent2[0]
+    # Select a random shapelet from each individual for crossover
+    idx1 = np_random.integers(len(parent1))
+    idx2 = np_random.integers(len(parent2))
 
-        # For child1, use A's index with B's start
-        timeseries_a = X[shap_a.index][shap_b.start : shap_b.start + len(shap_b)]
-        shap_c = Shapelet(timeseries_a, index=shap_a.index, start=shap_b.start)
+    shap_a = parent1[idx1]
+    shap_b = parent2[idx2]
 
-        # For child2, use B's index with A's start
-        timeseries_b = X[shap_b.index][shap_a.start : shap_a.start + len(shap_a)]
-        shap_d = Shapelet(timeseries_b, index=shap_b.index, start=shap_a.start)
+    timeseries_c = X[shap_a.index][shap_b.start : shap_b.start + len(shap_b)]
+    shap_c = Shapelet(timeseries_c, index=shap_a.index, start=shap_b.start)
 
-        # TODO fix this. def not ideal, but creating a new individual here is troublesome
-        parent1.clear()
-        parent1.extend([shap_a, shap_c])
-        parent2.clear()
-        parent2.extend([shap_b, shap_d])
+    timeseries_d = X[shap_b.index][shap_a.start : shap_a.start + len(shap_a)]
+    shap_d = Shapelet(timeseries_d, index=shap_b.index, start=shap_a.start)
 
-        return parent1, parent2
+    # Create new individuals
+    child1_shapelets = parent1[:]
+    child2_shapelets = parent2[:]
 
-    # General case: crossover for individuals with multiple shapelets
-    crossover_point = np_random.integers(1, min(len(parent1), len(parent2)))
-    child1_shapelets = parent1[:crossover_point]
-    child2_shapelets = parent2[:crossover_point]
+    child1_shapelets[idx1] = shap_c
+    child2_shapelets[idx2] = shap_d
 
-    # Handle remaining shapelets from parent2 to child1
-    for i, shap in enumerate(parent1[crossover_point:], start=crossover_point):
-        if i < len(parent2):  # Still within the bounds of parent2
-            shap_b = parent2[i]
-            timeseries = X[shap.index][shap_b.start : shap_b.start + len(shap_b)]
-            new_shap = Shapelet(timeseries, index=shap.index, start=shap_b.start)
-            child1_shapelets.append(new_shap)
-        else:
-            # Extend child1 with remaining shapelets from parent1
-            child1_shapelets.extend(parent1[i:])
-            break
-
-    # Handle remaining shapelets from parent1 to child2
-    for i, shap in enumerate(parent2[crossover_point:], start=crossover_point):
-        if i < len(parent1):  # Still within the bounds of parent1
-            shap_b = parent1[i]
-            timeseries = X[shap.index][shap_b.start : shap_b.start + len(shap_b)]
-            new_shap = Shapelet(timeseries, index=shap.index, start=shap_b.start)
-            child2_shapelets.append(new_shap)
-        else:
-            # Extend child2 with remaining shapelets from parent2
-            child2_shapelets.extend(parent2[i:])
-            break
-
-    # Return the new children
-    # TODO fix this. def not ideal, but creating a new individual here is troublesome
     parent1.clear()
     parent1.extend(child1_shapelets)
     parent2.clear()
     parent2.extend(child2_shapelets)
 
     return parent1, parent2
-
-    # child1 = ShapeletIndividual(child1_shapelets)
-    # child2 = ShapeletIndividual(child2_shapelets)
-    # return child1, child2
 
 
 def crossover_AND(ind1, ind2, **kwargs):

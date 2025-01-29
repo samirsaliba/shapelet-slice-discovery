@@ -28,7 +28,7 @@ from gendis.evaluation import class_predominance, evaluate_subgroup, precision, 
 from gendis.visualization import (
     plot_best_matching_shaps,
     plot_coverage_heatmap,
-    plot_target_histogram,
+    plot_target_histograms_in_batches,
     plot_shaps,
 )
 
@@ -59,8 +59,17 @@ def main():
     logging.info("Labels info:")
     logging.info(df.label.value_counts().to_dict())
 
-    img_path = join(results_folder, "error_dist.png")
-    plot_target_histogram(df, label_col="label", target_col="error", img_path=img_path)
+    img_path = join(results_folder, "error_dist")
+    labels = df["label"].unique()
+
+    plot_target_histograms_in_batches(
+        df,
+        label_col="label",
+        target_col="error",
+        bins=20,
+        max_labels_per_plot=6,
+        img_path=img_path,
+    )
 
     labels = df["label"]
 
@@ -132,15 +141,15 @@ def main():
     }
 
     gendis_args = {
-        "population_size": 200,
-        "iterations": 200,
+        "population_size": 1000,  # 1000
+        "iterations": 1000,  # 1000
         "mutation_prob": 0.5,
         "crossover_prob": 0,
         "max_shaps": 2,
         "wait": 50,
         "pop_restarts": 5,
-        "min_len": 15,
-        "max_len": 40,
+        "min_len": 0.1,
+        "max_len": 0.25,
         "n_jobs": 1,  # multiprocessing.cpu_count() - 3,
         "cache_size": CACHE_SIZE,
         "verbose": False,

@@ -12,11 +12,19 @@ from sktime.datasets import load_UCR_UEA_dataset
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.metrics import accuracy_score, f1_score
 
-from sktime.classification.deep_learning.mlp import MLPClassifier
-from sktime.classification.deep_learning.cnn import CNNClassifier
-from sktime.classification.distance_based import KNeighborsTimeSeriesClassifier
-from sktime.classification.kernel_based import RocketClassifier
-from sktime.classification.shapelet_based import ShapeletLearningClassifierTslearn
+from sktime.classification.deep_learning import InceptionTimeClassifier
+
+# from sktime.classification.deep_learning.mlp import MLPClassifier
+# from sktime.classification.deep_learning.cnn import CNNClassifier
+# from sktime.classification.kernel_based import RocketClassifier
+
+# from sktime.classification.distance_based import KNeighborsTimeSeriesClassifier
+from sktime.classification.shapelet_based import (
+    ShapeletTransformClassifier,
+    MrSEQL,
+    ShapeletLearningClassifierTslearn,
+)
+from sktime.classification.interval_based import TimeSeriesForestClassifier
 
 import logging
 import pathlib
@@ -27,14 +35,25 @@ N_JOBS = 13
 TEST_SIZE = 0.7
 
 folder = "./results"
+
+# datasets = [
+#     "LargeKitchenAppliances",
+#     "DistalPhalanxOutlineAgeGroup",
+#     "Strawberry",
+#     "ShapesAll",
+#     "FaceAll",
+#     "InsectWingbeatSound",
+#     "UWaveGestureLibraryAll",
+#     "ECG5000",
+#     "NonInvasiveFetalECGThorax1",
+#     "NonInvasiveFetalECGThorax2",
+# ]
+
 datasets = [
-    "LargeKitchenAppliances",
     "DistalPhalanxOutlineAgeGroup",
+    "NonInvasiveFetalECGThorax1",
+    "NonInvasiveFetalECGThorax2",
     "Strawberry",
-    "ShapesAll",
-    "FaceAll",
-    "InsectWingbeatSound",
-    "UWaveGestureLibraryAll",
 ]
 
 
@@ -59,25 +78,25 @@ logging.info(f"Datasets: \n {',\n'.join(datasets)}")
 
 
 classifiers = {
-    "cnn": (
-        CNNClassifier,
-        {"n_epochs": 2000, "n_conv_layers": 1, "random_state": RANDOM_STATE},
+    "inception": (
+        InceptionTimeClassifier,
+        {
+            "n_epochs": 1000,
+            "random_state": RANDOM_STATE,
+        },
     ),
-    # "knn": (
-    #     KNeighborsTimeSeriesClassifier,
-    #     {"distance": "euclidean", "algorithm": "ball_tree", "n_jobs": N_JOBS},
-    # ),
-    "rocket": (
-        RocketClassifier,
-        {"num_kernels": 1000, "n_jobs": N_JOBS, "random_state": RANDOM_STATE},
+    "mrseql-sax": (
+        MrSEQL,
+        {"symrep": "sax"},
     ),
-    # "shapelet": (
-    #     ShapeletLearningClassifierTslearn,
-    #     {"max_iter": 1000, "random_state": RANDOM_STATE},
-    # ),
-    "mlp": (
-        MLPClassifier,
-        {"n_epochs": 2000, "random_state": RANDOM_STATE},
+    "tsforest": (
+        TimeSeriesForestClassifier,
+        {
+            "n_estimators": 200,
+            "min_interval": 15,
+            "n_jobs": N_JOBS,
+            "random_state": RANDOM_STATE,
+        },
     ),
 }
 
@@ -97,7 +116,7 @@ def main():
         X, y = load_UCR_UEA_dataset(name=dataset, return_type="numpy2d")
 
         df = pd.DataFrame(data=X)
-        df["label"] = y
+        df["label"] = y.astype(int)  # Making sure to cast the labels as integers
         df.to_csv(join(folder, f"{dataset}_raw.csv"), index=False)
 
         logging.info(f"len(df) = {len(df)}")
