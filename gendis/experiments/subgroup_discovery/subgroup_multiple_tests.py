@@ -60,12 +60,18 @@ def main():
     )
 
     labels = df["label"]
-    try:
-        X = df.drop(
-            columns=["pattern_x0", "pattern_x1", "pattern_y", "error", "label"]
-        ).values
-    except:
-        X = df.drop(columns=["error", "label"]).values
+    X = df.drop(
+        columns=[
+            "pattern_x0",
+            "pattern_x1",
+            "pattern_y",
+            "error",
+            "label",
+            "predicted",
+        ],
+        errors="ignore",
+    ).values
+
     y = df["error"]
 
     random_seed_values = range(N_TESTS)
@@ -77,7 +83,7 @@ def main():
     # Subgroup Search parameters
     K = 10
     COVERAGE_ALPHA = 0.5
-    SUBGROUP_SIZE_BETA = 0.5
+    SUBGROUP_SIZE_BETA = 0.2
     THRESHOLD_MAX_IT = 400
     THRESHOLD_KAPPA = 0.9
     SEARCH_MODE = "percentile"
