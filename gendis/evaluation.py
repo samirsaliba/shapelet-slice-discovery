@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 
 def class_predominance(mask, labels, n=None):
@@ -117,3 +118,101 @@ def evaluate_subgroup(mask, labels):
         )
 
     return results
+
+
+def summarize_shapelet_distances(distances, subgroup):
+    """
+    Summarize shapelet distance distributions for subgroup and outside.
+
+    Parameters
+    ----------
+    distances : pd.DataFrame
+        DataFrame with columns D_0, D_1, ..., one for each shapelet.
+
+    subgroup : list or np.ndarray
+        Indices of instances inside the subgroup.
+
+    Returns
+    -------
+    dict
+        Dictionary with descriptive statistics for each shapelet, split by subgroup vs outside.
+    """
+    result = {}
+
+    # Columns corresponding to shapelet distances
+    distance_cols = distances.filter(like="D_").columns
+
+    # Create boolean mask
+    inside_mask = np.zeros(len(distances), dtype=bool)
+    inside_mask[subgroup] = True
+
+    for col in distance_cols:
+        stats = {}
+
+        for label, mask in [("subgroup", inside_mask), ("outside", ~inside_mask)]:
+            values = distances.loc[mask, col].values
+
+            stats[label] = {
+                "min": float(np.min(values)),
+                "mean": float(np.mean(values)),
+                "median": float(np.median(values)),
+                "max": float(np.max(values)),
+                "std": float(np.std(values)),
+                "q1": float(np.percentile(values, 25)),
+                "q3": float(np.percentile(values, 75)),
+            }
+
+        result[col] = stats
+
+    return result
+
+
+def compute_jaccard_matrix(index_sets):
+    """
+    Compute the pairwise Jaccard index between sets of indices.
+
+    Parameters
+    ----------
+    index_sets : list of sets
+        Output from `get_subgroup_coverage_indices`.
+
+    Returns
+    -------
+    np.ndarray
+        Symmetric matrix of Jaccard indices, shape (n_subgroups, n_subgroups).
+    """
+    n = len(index_sets)
+    jaccard_matrix = np.zeros((n, n))
+
+    for i in range(n):
+        for j in range(i, n):
+            inter = len(index_sets[i] & index_sets[j])
+            union = len(index_sets[i] | index_sets[j])
+            jaccard = inter / union if union > 0 else 0.0
+            jaccard_matrix[i, j] = jaccard
+            jaccard_matrix[j, i] = jaccard  # symmetry
+
+    return jaccard_matrix
+
+
+def summarize_jaccard_matrix(jaccard_df):
+    n = jaccard_df.shape[0]
+    mask = ~np.eye(n, dtype=bool)  # exclude diagonal
+    vals = jaccard_df.values[mask]
+    return {"mean": vals.mean(), "std": vals.std(), "min": vals.min()}
+
+
+def get_jaccard_df_summary(topk):
+
+    sgs_index_sets = {
+        idx: set(np.where(item["subgroup"])[0].tolist())
+        for idx, item in enumerate(topk)
+    }
+
+    jaccard_df = pd.DataFrame(
+        compute_jaccard_matrix(sgs_index_sets),
+        index=range(len(sgs_index_sets)),
+        columns=range(len(sgs_index_sets)),
+    )
+
+    return jaccard_df, summarize_jaccard_matrix(jaccard_df)
