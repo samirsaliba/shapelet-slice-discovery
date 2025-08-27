@@ -8,11 +8,13 @@ from gendis.processing import preprocess_input
 from gendis.evaluation import (
     class_predominance,
     evaluate_subgroup,
+    get_jaccard_df_summary,
     summarize_shapelet_distances,
 )
 from gendis.visualization import (
     plot_best_matching_shaps,
     plot_coverage_heatmap,
+    plot_jaccard_heatmap,
     plot_subgroup_alignment_comparison,
     plot_target_histogram_overall,
 )
@@ -52,8 +54,6 @@ def main():
         df, target_col="error", bins=20, ymax=2500, img_path=img_path
     )
 
-    exit(0)
-
     logging.info("Loaded data")
     labels = df["label"]
     X = df.drop(
@@ -74,12 +74,20 @@ def main():
     gendis = GeneticExtractor.load(model_path)
     logging.info("Loaded trained model")
 
-    # Recompute and regenerate outputs
+    # Coverage heatmap
     plot_coverage_heatmap(
         gendis.top_k.subgroups,
         img_path=join(results_folder, "coverage_heatmap_post.pdf"),
         cmap="YlGnBu",
     )
+
+    # Jaccard
+    jaccard_df, jaccard_summary = get_jaccard_df_summary(gendis.top_k.to_dict())
+    jaccard_df.to_csv(join(results_folder, "jaccard_matrix.csv"))
+    save_json(jaccard_summary, join(results_folder, "jaccard_matrix_summary.json"))
+
+    img_path = join(results_folder, f"jaccard_heatmap.pdf")
+    plot_jaccard_heatmap(jaccard_df, img_path=img_path)
 
     topk_classes = []
     topk_metrics = []

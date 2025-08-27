@@ -43,7 +43,6 @@ def plot_target_histogram_overall(df, target_col="error", bins=20, ymax=None, **
     plt.title(f"Histogram of {target_col} (Overall)")
 
 
-
 @plot_func
 def plot_target_histogram(df, label_col="label", target_col="error", bins=10, **kwargs):
     # Group data by label
@@ -385,7 +384,7 @@ def plot_jaccard_heatmap(jaccard_df, cmap="Blues"):
     mask = np.tril(np.ones(jaccard_df.shape), k=0).astype(bool)
 
     plt.figure(figsize=(10, 8))
-    sns.heatmap(
+    ax = sns.heatmap(
         jaccard_df,
         mask=mask,
         cmap=cmap,
@@ -396,6 +395,9 @@ def plot_jaccard_heatmap(jaccard_df, cmap="Blues"):
         vmax=1.0,
         cbar_kws={"shrink": 0.75},
         linewidths=0.5,
+        annot_kws={"size": 16},  # cell text size
     )
-    plt.title("Upper Triangular Jaccard Similarity Heatmap")
+    cbar = ax.collections[0].colorbar
+    cbar.ax.tick_params(labelsize=16)
+    plt.title("Upper Triangular Jaccard Similarity Heatmap", fontsize=16)
     plt.tight_layout()
