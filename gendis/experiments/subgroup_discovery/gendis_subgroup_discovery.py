@@ -1,12 +1,9 @@
 from datetime import datetime
 import logging
-import multiprocessing
-import numpy as np
 import os
 from os.path import basename, join, splitext
 import pandas as pd
 import random
-from sklearn.model_selection import ShuffleSplit
 import time
 
 from gendis.processing import preprocess_input
@@ -24,12 +21,21 @@ from gendis.genetic import GeneticExtractor
 from gendis.SubgroupSearch import SubgroupSearch
 from gendis.TopKSubgroups import TopKSubgroups
 
-from gendis.evaluation import class_predominance, evaluate_subgroup, precision, recall
+from gendis.evaluation import (
+    class_predominance,
+    evaluate_subgroup,
+    get_jaccard_df_summary,
+    precision,
+    recall,
+    summarize_shapelet_distances,
+)
 from gendis.visualization import (
     plot_best_matching_shaps,
     plot_coverage_heatmap,
-    plot_target_histograms_in_batches,
+    plot_jaccard_heatmap,
     plot_shaps,
+    plot_subgroup_alignment_comparison,
+    plot_target_histograms_in_batches,
 )
 
 from util import parse_args, save_json, setup_logging
@@ -85,9 +91,7 @@ def main():
         errors="ignore",
     ).values
 
-    y = df["error"]
-
-    X_train, y_train = X, y
+    y = df["error"].values
 
     CACHE_SIZE = 8192
 
@@ -95,7 +99,7 @@ def main():
     K = 10
     COVERAGE_ALPHA = 0.5
     SUBGROUP_SIZE_BETA = 0.5
-    THRESHOLD_MAX_IT = 400
+    THRESHOLD_MAX_IT = None
     THRESHOLD_KAPPA = 0.9
     SEARCH_MODE = "percentile"
     subgroup_args = {
@@ -113,7 +117,7 @@ def main():
     logging.info(subgroup_args)
 
     subgroup_search = SubgroupSearch(
-        distance_function=SubgroupSearch.simple_mean,
+        distance_function=SubgroupSearch.mean_shift,
         threshold_search_mode=SEARCH_MODE,
         threshold_kappa=THRESHOLD_KAPPA,
         sg_size_beta=SUBGROUP_SIZE_BETA,
@@ -131,7 +135,7 @@ def main():
         slide_shapelet,
         # smooth_shapelet,
     ]
-    cx_ops = [point_crossover]
+    cx_ops = []
 
     funcs = {
         "top_k": top_k,
@@ -141,16 +145,16 @@ def main():
     }
 
     gendis_args = {
-        "population_size": 1000,  # 1000
-        "iterations": 1000,  # 1000
-        "mutation_prob": 0.5,
+        "population_size": 500,
+        "iterations": 500,
+        "mutation_prob": 1,
         "crossover_prob": 0,
         "max_shaps": 2,
-        "wait": 50,
-        "pop_restarts": 5,
+        "wait": None,
+        "pop_restarts": None,
         "min_len": 0.1,
         "max_len": 0.25,
-        "n_jobs": 1,  # multiprocessing.cpu_count() - 3,
+        "n_jobs": 1,
         "cache_size": CACHE_SIZE,
         "verbose": False,
         "random_seed": RANDOM_SEED_VAL,
@@ -160,10 +164,9 @@ def main():
 
     # Preprocess and model fit
     args = {**gendis_args, **funcs}
-    X_input, y_input = preprocess_input(X_train, y_train)
     gendis = GeneticExtractor(**args)
     t0 = time.time()
-    gendis.fit(X_input, y_input)
+    gendis.fit(X, y)
     t1 = time.time()
 
     save_json(
@@ -194,20 +197,53 @@ def main():
         {"coverage": gendis.top_k.coverage},
         join(results_folder, "topk_coverage.json"),
     )
-    img_path = join(results_folder, f"coverage_heatmap.png")
+    img_path = join(results_folder, f"coverage_heatmap.pdf")
     plot_coverage_heatmap(gendis.top_k.subgroups, img_path=img_path, cmap="YlGnBu")
+
+    jaccard_df, jaccard_summary = get_jaccard_df_summary(gendis.top_k.to_dict())
+    jaccard_df.to_csv(join(results_folder, "jaccard_matrix.csv"))
+    save_json(jaccard_summary, join(results_folder, "jaccard_matrix_summary.json"))
+
+    img_path = join(results_folder, f"jaccard_heatmap.pdf")
+    plot_jaccard_heatmap(jaccard_df, img_path=img_path)
 
     topk_classes = []
     topk_metrics = []
+    topk_dist_metrics = {}
+    topk_alignment_plots_data = {}
 
     for i, individual in enumerate(gendis.top_k.subgroups):
         distances, subgroup = gendis.transform(
-            X_input, shapelets=individual, thresholds=individual.thresholds
+            X, shapelets=individual, thresholds=individual.thresholds
         )
-        img_path = join(results_folder, f"sg_{i}_top_members.png")
+
+        distance_metrics = summarize_shapelet_distances(
+            distances=distances, subgroup=subgroup
+        )
+        topk_dist_metrics[f"subgroup_{i}"] = distance_metrics
+
+        img_path = join(results_folder, f"sg_{i}_top_members.pdf")
         plot_best_matching_shaps(
-            X_train, distances, subgroup, individual, img_path=img_path
+            X,
+            distances,
+            subgroup,
+            individual,
+            undiff_shapelets=False,
+            img_path=img_path,
         )
+
+        img_path = join(results_folder, f"sg_{i}_shap_alignment_comparison.pdf")
+        alignment_plot_data = plot_subgroup_alignment_comparison(
+            X,
+            distances,
+            subgroup,
+            individual,
+            use_mean=True,
+            undiff_shapelets=False,
+            img_path=img_path,
+        )
+        alignment_plot_data["shapelet_thresholds"] = individual.thresholds
+        topk_alignment_plots_data[f"subgroup_{i}"] = alignment_plot_data
 
         predominant_class = class_predominance(subgroup, labels=labels, n=1)
 
@@ -224,16 +260,21 @@ def main():
 
         topk_metrics.extend(metrics)
 
-        # img_path = join(results_folder, f"shaps_{i}.png")
+        # img_path = join(results_folder, f"shaps_{i}.pdf")
         # plot_shaps(individual, img_path=img_path)
 
+    save_json(topk_dist_metrics, join(results_folder, "topk_distance_metrics.json"))
+    save_json(
+        topk_alignment_plots_data,
+        join(results_folder, f"topk_alignment_plots_data.json"),
+    )
     classes_df = pd.DataFrame(topk_classes)
     metrics_df = pd.DataFrame(topk_metrics)
 
     classes_df.to_csv(join(results_folder, f"topk_classes.csv"))
     metrics_df.to_csv(join(results_folder, f"topk_classes_metrics.csv"))
 
-    # gendis.save(join(results_folder, "gendis.pickle"))
+    gendis.save(join(results_folder, "gendis.pickle"))
 
 
 if __name__ == "__main__":

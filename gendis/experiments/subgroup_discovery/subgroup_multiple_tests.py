@@ -151,7 +151,7 @@ def main():
         top_k = TopKSubgroups(K, COVERAGE_ALPHA, run_id=run_num)
 
         subgroup_search = SubgroupSearch(
-            distance_function=SubgroupSearch.simple_mean,
+            distance_function=SubgroupSearch.mean_shift,
             threshold_search_mode=SEARCH_MODE,
             threshold_kappa=THRESHOLD_KAPPA,
             sg_size_beta=SUBGROUP_SIZE_BETA,

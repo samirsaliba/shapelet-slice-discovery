@@ -166,7 +166,7 @@ def main():
         )
 
         subgroup_search = SubgroupSearch(
-            distance_function=SubgroupSearch.simple_mean,
+            distance_function=SubgroupSearch.mean_shift,
             threshold_search_mode=subgroup_args["threshold_search_mode"],
             threshold_kappa=subgroup_args["threshold_kappa"],
             sg_size_beta=subgroup_args["sg_size_beta"],
