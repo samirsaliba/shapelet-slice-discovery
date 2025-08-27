@@ -306,5 +306,5 @@ class SubgroupSearch:
         return 1 - mannwhitneyu(y1.reshape(-1), y2.reshape(-1)).pvalue
 
     @staticmethod
-    def simple_mean(y1, y2):
+    def mean_shift(y1, y2):
         return np.absolute(np.mean(y1.reshape(-1)) - np.mean(y2.reshape(-1)))

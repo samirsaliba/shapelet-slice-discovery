@@ -61,9 +61,7 @@ class TopKSubgroups:
         Returns:
             float: The weighted coverage score for the subgroup.
         """
-        in_sg_weights = weights[subgroup].sum()
-        sg_weights_total = subgroup.sum() * self.coverage_alpha
-        return in_sg_weights / sg_weights_total
+        return weights[subgroup].sum() / subgroup.sum()
 
     def update(self, pop, it, length_input, toolbox):
         """
@@ -74,7 +72,7 @@ class TopKSubgroups:
             it (int): The current iteration of the genetic algorithm.
             length_input (list): A list representing the length of input data.
         """
-        coverage = np.ones(length_input)
+        coverage = np.zeros(length_input)
         weights = np.power([self.coverage_alpha], coverage)
 
         if self.subgroups is None:
@@ -135,7 +133,6 @@ class TopKSubgroups:
         if not np.array_equal(coverage, self.coverage):
             self.last_update = it
 
-        self.coverage = coverage - 1
         self.subgroups = new_top_k
         self.ids = new_ids
         self.compile_stats(it)
