@@ -16,6 +16,7 @@ from gendis.visualization import (
     plot_coverage_heatmap,
     plot_jaccard_heatmap,
     plot_subgroup_alignment_comparison,
+    plot_target_histogram,
     plot_target_histogram_overall,
 )
 from gendis.genetic import GeneticExtractor
@@ -51,8 +52,10 @@ def main():
     labels = df["label"].unique()
 
     plot_target_histogram_overall(
-        df, target_col="error", bins=20, ymax=2500, img_path=img_path
+        df, target_col="error", bins=20, ymax=None, img_path=img_path
     )
+
+    plot_target_histogram(df, target_col="error", bins=20, ymax=None, img_path=img_path)
 
     logging.info("Loaded data")
     labels = df["label"]
@@ -87,6 +90,11 @@ def main():
     save_json(jaccard_summary, join(results_folder, "jaccard_matrix_summary.json"))
 
     img_path = join(results_folder, f"jaccard_heatmap.pdf")
+
+    # offsetting the jaccard plot (subgroups 1...k instead of 0...k-1)
+    new_labels = [i + 1 for i in jaccard_df.index]
+    jaccard_df.index = new_labels
+    jaccard_df.columns = new_labels
     plot_jaccard_heatmap(jaccard_df, img_path=img_path)
 
     topk_classes = []

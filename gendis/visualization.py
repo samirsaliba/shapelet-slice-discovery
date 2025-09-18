@@ -36,6 +36,11 @@ def plot_target_histogram_overall(df, target_col="error", bins=20, ymax=None, **
         range=(0, 1),
         **kwargs,
     )
+    mean_val = np.mean(df[target_col])
+    plt.axvline(
+        mean_val, linestyle="dashed", linewidth=1, label=f"Mean: {mean_val:.2f}"
+    )
+    plt.legend()
     plt.xlabel(target_col)
     plt.ylabel("Frequency")
     if ymax is not None:
@@ -44,7 +49,11 @@ def plot_target_histogram_overall(df, target_col="error", bins=20, ymax=None, **
 
 
 @plot_func
-def plot_target_histogram(df, label_col="label", target_col="error", bins=10, **kwargs):
+def plot_target_histogram(
+    df, label_col="label", target_col="error", bins=10, ymax=None, **kwargs
+):
+    mean_val = np.mean(df[target_col])
+
     # Group data by label
     labels = df[label_col].unique()  # Unique labels
     data = [df.loc[df[label_col] == lb, target_col] for lb in labels]
@@ -54,10 +63,15 @@ def plot_target_histogram(df, label_col="label", target_col="error", bins=10, **
         data, bins=bins, histtype="bar", label=labels, alpha=0.7, range=(0, 1), **kwargs
     )
 
+    plt.axvline(
+        mean_val, linestyle="dashed", linewidth=1, label=f"Mean: {mean_val:.2f}"
+    )
     plt.legend(loc="upper right")
     plt.xlabel(target_col)
     plt.ylabel("Frequency")
     plt.title(f"Histogram of {target_col} by {label_col}")
+    if ymax is not None:
+        plt.ylim(0, ymax)
 
 
 @plot_func
