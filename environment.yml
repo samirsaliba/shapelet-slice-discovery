@@ -1,0 +1,59 @@
+name: gendis_fresh
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+
+dependencies:
+  - python=3.12
+
+  # Core scientific computing
+  - numpy=2.2
+  - scipy=1.16
+  - pandas=2.3
+  - scikit-learn=1.6
+
+  # PyTorch for tensor operations and GPU acceleration
+  - pytorch=2.8.0
+  - pytorch-cuda=12.8
+
+  # Genetic algorithms (CORE for GENDIS - used in genetic.py)
+  - deap=1.4
+
+  # Visualization (for results and debugging)
+  - matplotlib=3.10
+  - seaborn=0.13
+
+  # Progress tracking and utilities
+  - tqdm=4.67
+  - joblib=1.5
+
+  # Numerical computing optimizations
+  - numba=0.61
+  - llvmlite=0.44
+
+  # Build tools
+  - setuptools
+  - wheel
+  - pip
+
+  # Pip-only dependencies
+  - pip:
+    # Time series analysis (CORE for GENDIS)
+    - tslearn==0.6.4
+    - dtaidistance==2.3.13
+    
+    # Subgroup discovery (CORE for model performance analysis - used in SubgroupSearch.py)
+    - pysubgroup==0.8.0
+    
+    # Testing framework
+    - nose2==0.8.0
+    
+    # Terminal output formatting
+    - terminaltables==3.1.0
+    
+    # Database for experiment tracking
+    - SQLAlchemy==2.0.36
+    
+    # Additional utilities
+    - threadpoolctl==3.6.0
