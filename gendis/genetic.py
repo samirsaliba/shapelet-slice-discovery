@@ -70,8 +70,17 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         self.iterations = iterations
         self.mutation_prob = mutation_prob
         self.crossover_prob = crossover_prob
-        self.wait = wait
-        self.pop_restarts = pop_restarts
+        if wait is not None:
+            logging.info(
+                f"Early stopping enabled [wait={wait}, restarts={pop_restarts}]."
+            )
+            self.early_stopping_enabled = True
+            self.wait = wait
+            self.pop_restarts = pop_restarts
+        else:
+            self.early_stopping_enabled = False
+            logging.info(f"Early stopping disabled.")
+
         self.max_shaps = max_shaps
         self.min_len = min_len
         self.max_len = max_len
@@ -175,13 +184,14 @@ class GeneticExtractor(BaseEstimator, TransformerMixin):
         return ind1, ind2
 
     def _check_early_stopping(self):
-        if self.it - self.top_k.last_update > self.wait:
-            if self.pop_restart_counter < self.pop_restarts:
-                # Will trigger population reset
-                self.top_k.last_update = self.it
-                self.should_restart_pop = True
-            else:
-                return True
+        if self.early_stopping_enabled:
+            if self.it - self.top_k.last_update > self.wait:
+                if self.pop_restart_counter < self.pop_restarts:
+                    # Will trigger population reset
+                    self.top_k.last_update = self.it
+                    self.should_restart_pop = True
+                else:
+                    return True
         return False
 
     def fit(self, X, y):

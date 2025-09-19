@@ -9,19 +9,51 @@ from .processing import undifferentiate_series
 def plot_func(func):
     def wrapper(*args, **kwargs):
         img_path = kwargs.pop("img_path", None)
-        func(*args, **kwargs)
+        result = func(*args, **kwargs)
 
         if img_path is not None:
-            plt.savefig(img_path)
+            plt.savefig(img_path, format="pdf")
         else:
             plt.show()
         plt.clf()
+
+        return result
 
     return wrapper
 
 
 @plot_func
-def plot_target_histogram(df, label_col="label", target_col="error", bins=10, **kwargs):
+def plot_target_histogram_overall(df, target_col="error", bins=20, ymax=None, **kwargs):
+    """
+    Plot a single histogram for the entire target column, ignoring labels.
+    Optionally fixes the y-axis max to ensure visual comparability.
+    """
+    plt.hist(
+        df[target_col],
+        bins=bins,
+        histtype="bar",
+        alpha=0.7,
+        range=(0, 1),
+        **kwargs,
+    )
+    mean_val = np.mean(df[target_col])
+    plt.axvline(
+        mean_val, linestyle="dashed", linewidth=1, label=f"Mean: {mean_val:.2f}"
+    )
+    plt.legend()
+    plt.xlabel(target_col)
+    plt.ylabel("Frequency")
+    if ymax is not None:
+        plt.ylim(0, ymax)
+    plt.title(f"Histogram of {target_col} (Overall)")
+
+
+@plot_func
+def plot_target_histogram(
+    df, label_col="label", target_col="error", bins=10, ymax=None, **kwargs
+):
+    mean_val = np.mean(df[target_col])
+
     # Group data by label
     labels = df[label_col].unique()  # Unique labels
     data = [df.loc[df[label_col] == lb, target_col] for lb in labels]
@@ -31,11 +63,15 @@ def plot_target_histogram(df, label_col="label", target_col="error", bins=10, **
         data, bins=bins, histtype="bar", label=labels, alpha=0.7, range=(0, 1), **kwargs
     )
 
+    plt.axvline(
+        mean_val, linestyle="dashed", linewidth=1, label=f"Mean: {mean_val:.2f}"
+    )
     plt.legend(loc="upper right")
     plt.xlabel(target_col)
     plt.ylabel("Frequency")
     plt.title(f"Histogram of {target_col} by {label_col}")
-    plt.show()
+    if ymax is not None:
+        plt.ylim(0, ymax)
 
 
 @plot_func
@@ -91,7 +127,7 @@ def plot_target_histograms_in_batches(
 
             # Generate a file path for each batch if saving
             batch_img_path = (
-                f"{img_path}_batch_{batch_idx + 1}.png" if img_path else None
+                f"{img_path}_batch_{batch_idx + 1}.pdf" if img_path else None
             )
 
             # Plot the batch using the wrapper
@@ -176,7 +212,9 @@ def plot_shaps(shaps, x_label="Time", y_label="Value"):
 
 
 @plot_func
-def plot_best_matching_shaps(X, distances, subgroup, individual):
+def plot_best_matching_shaps(
+    X, distances, subgroup, individual, undiff_shapelets: bool
+):
     # Filter datasets based on subgroup mask
     X = X.copy()
     distances = distances.copy()
@@ -218,13 +256,127 @@ def plot_best_matching_shaps(X, distances, subgroup, individual):
         # Plot shapelets
         for j, shap in enumerate(individual):
             position = distances.loc[distances.index[idx], f"L_{j}"]
-            offset = timeseries[int(position)]
-            shap_undiffed = undifferentiate_series(shap, offset=offset)
-            shap_x = np.arange(position, position + len(shap_undiffed))
-            axs[i].plot(shap_x, shap_undiffed, alpha=0.8)
+
+            if undiff_shapelets:
+                offset = timeseries[int(position)]
+                shap_to_plot = undifferentiate_series(shap, offset=offset)
+            else:
+                offset = timeseries[int(position)] - shap[0]
+                shap_to_plot = shap + offset
+
+            shap_x = np.arange(position, position + len(shap_to_plot))
+            axs[i].plot(shap_x, shap_to_plot, alpha=0.8)
 
     plt.xticks(np.arange(0, len(timeseries) + 1, 30.0))
     plt.tight_layout()
+
+
+@plot_func
+def plot_subgroup_alignment_comparison(
+    X, distances, subgroup, individual, use_mean=False, undiff_shapelets=True
+):
+    """
+    For a given subgroup and individual (list of shapelets),
+    plot 3 representative instances from inside the subgroup
+    (min, median, max total distance) and 3 from outside.
+
+    Parameters
+    ----------
+    X : pd.DataFrame or np.ndarray
+        The original time series dataset.
+
+    distances : pd.DataFrame
+        Distance DataFrame with columns for distances (D_*) and positions (L_*).
+
+    subgroup : list or np.ndarray
+        Indices of instances inside the subgroup.
+
+    individual : list
+        List of shapelets (as arrays).
+
+    use_mean : bool
+        Whether to use the mean of the distances or the sum of the distances to
+        retrieve min, median, max instances
+
+    undiff_shapelets : bool
+        Whether to undifferentiate the shapelets before plotting.
+    """
+    _X = X.copy()
+    distances = distances.copy()
+
+    d_cols = [f"D_{j}" for j in range(len(individual))]
+    d_sum = distances[d_cols].sum(axis=1)
+    distances["D_sum"] = d_sum
+    distances["D_mean"] = d_sum / len(d_cols)
+
+    inside_mask = np.zeros(len(distances), dtype=bool)
+    inside_mask[subgroup] = True
+
+    def get_min_median_max_idxs(distances_subset):
+        sort_key = "D_mean" if use_mean else "D_sum"
+        sorted_idx = distances_subset.sort_values(sort_key, ascending=True).index
+        min_idx = sorted_idx[0]
+        median_idx = sorted_idx[len(sorted_idx) // 2]
+        max_idx = sorted_idx[-1]
+        return [min_idx, median_idx, max_idx]
+
+    inside_idxs = get_min_median_max_idxs(distances[inside_mask])
+    outside_idxs = get_min_median_max_idxs(distances[~inside_mask])
+
+    fig, axs = plt.subplots(3, 2, figsize=(12, 8), sharex=True, sharey=True)
+    plt.subplots_adjust(hspace=0.3)
+
+    inside_data = []
+    outside_data = []
+
+    for col, idx_group in enumerate([inside_idxs, outside_idxs]):
+        group_label = "In subgroup" if col == 0 else "Outside of sg."
+        data = inside_data if col == 0 else outside_data
+
+        for row, idx in enumerate(idx_group):
+            ax = axs[row, col]
+            timeseries = _X.iloc[idx] if isinstance(_X, pd.DataFrame) else _X[idx]
+            ax.plot(timeseries, alpha=0.4, label="Series")
+
+            positions_aux = []
+            for j, shap in enumerate(individual):
+                position = int(distances.loc[idx, f"L_{j}"])
+                positions_aux.append(position)
+
+                if undiff_shapelets:
+                    offset = timeseries[position]
+                    shap_to_plot = undifferentiate_series(shap, offset=offset)
+                else:
+                    offset = timeseries[position] - shap[0]
+                    shap_to_plot = shap + offset
+
+                shap_x = np.arange(position, position + len(shap_to_plot))
+                ax.plot(shap_x, shap_to_plot, alpha=0.8, label=f"Shapelet {j}")
+
+            instance_record = {
+                "index": idx,
+                "rank": ["min", "median", "max"][row],
+                "distances": distances.loc[idx, d_cols].values.tolist(),
+                "distances_sum": distances.loc[idx, "D_sum"],
+                "distances_mean": distances.loc[idx, "D_mean"],
+                "positions": positions_aux,
+            }
+            data.append(instance_record)
+
+            if col == 0:
+                ax.set_ylabel(["Min", "Median", "Max"][row])
+            if row == 0:
+                ax.set_title(group_label)
+
+    plt.suptitle(
+        "Subgroup vs Outside: Min / Median / Max Alignment to Shapelets", y=1.02
+    )
+    plt.tight_layout()
+
+    return {
+        "inside": inside_data,
+        "outside": outside_data,
+    }
 
 
 @plot_func
@@ -238,3 +390,28 @@ def plot_coverage_heatmap(top_k, cmap="YlGnBu"):
     plt.xlabel("Instance Index")
     plt.ylabel("Top-k Individuals")
     plt.title("Coverage Matrix for Instances by Top-k Individuals")
+
+
+@plot_func
+def plot_jaccard_heatmap(jaccard_df, cmap="Blues"):
+
+    mask = np.tril(np.ones(jaccard_df.shape), k=0).astype(bool)
+
+    plt.figure(figsize=(10, 8))
+    ax = sns.heatmap(
+        jaccard_df,
+        mask=mask,
+        cmap=cmap,
+        annot=True,
+        fmt=".2f",
+        square=True,
+        vmin=0.0,
+        vmax=1.0,
+        cbar_kws={"shrink": 0.75},
+        linewidths=0.5,
+        annot_kws={"size": 16},  # cell text size
+    )
+    cbar = ax.collections[0].colorbar
+    cbar.ax.tick_params(labelsize=16)
+    plt.title("Upper Triangular Jaccard Similarity Heatmap", fontsize=16)
+    plt.tight_layout()

@@ -120,51 +120,73 @@ def evaluate_subgroup(mask, labels):
     return results
 
 
-def summarize_shapelet_distances(distances, subgroup):
+def compute_shapelet_subgroup_metrics(errors, predicted_mask, original_mask):
     """
-    Summarize shapelet distance distributions for subgroup and outside.
+    Compute interestingness metrics for a shapelet-based subgroup,
+    and compare to the original subgroup mask for coverage and precision.
 
     Parameters
     ----------
-    distances : pd.DataFrame
-        DataFrame with columns D_0, D_1, ..., one for each shapelet.
+    errors : np.ndarray of shape (n_samples,)
+        Error values over which metrics are computed.
 
-    subgroup : list or np.ndarray
-        Indices of instances inside the subgroup.
+    predicted_mask : np.ndarray of bool
+        Boolean array of predicted subgroup membership (e.g., from classifier).
+
+    original_mask : np.ndarray of bool
+        Boolean array of original subgroup membership (e.g., from beam_df.subgroup.covers()).
 
     Returns
     -------
     dict
-        Dictionary with descriptive statistics for each shapelet, split by subgroup vs outside.
+        Dictionary of error-based metrics and overlap scores.
     """
-    result = {}
+    sg_errors = errors[predicted_mask]
+    size_sg = predicted_mask.sum()
+    size_total = len(errors)
 
-    # Columns corresponding to shapelet distances
-    distance_cols = distances.filter(like="D_").columns
+    mean_sg = sg_errors.mean()
+    mean_total = errors.mean()
+    std_sg = sg_errors.std()
+    std_total = errors.std()
+    median_sg = np.median(sg_errors)
+    median_total = np.median(errors)
+    max_sg = sg_errors.max()
+    max_total = errors.max()
+    min_sg = sg_errors.min()
+    min_total = errors.min()
 
-    # Create boolean mask
-    inside_mask = np.zeros(len(distances), dtype=bool)
-    inside_mask[subgroup] = True
+    # Overlap metrics
+    intersection = np.logical_and(predicted_mask, original_mask).sum()
+    original_size = original_mask.sum()
 
-    for col in distance_cols:
-        stats = {}
+    coverage = intersection / original_size if original_size > 0 else 0.0
+    precision = intersection / size_sg if size_sg > 0 else 0.0
+    recall = coverage
+    f1 = (
+        2 * precision * recall / (precision + recall) if precision + recall > 0 else 0.0
+    )
 
-        for label, mask in [("subgroup", inside_mask), ("outside", ~inside_mask)]:
-            values = distances.loc[mask, col].values
-
-            stats[label] = {
-                "min": float(np.min(values)),
-                "mean": float(np.mean(values)),
-                "median": float(np.median(values)),
-                "max": float(np.max(values)),
-                "std": float(np.std(values)),
-                "q1": float(np.percentile(values, 25)),
-                "q3": float(np.percentile(values, 75)),
-            }
-
-        result[col] = stats
-
-    return result
+    return {
+        "size_sg": int(size_sg),
+        "size_dataset": int(size_total),
+        "mean_sg": float(mean_sg),
+        "mean_dataset": float(mean_total),
+        "std_sg": float(std_sg),
+        "std_dataset": float(std_total),
+        "median_sg": float(median_sg),
+        "median_dataset": float(median_total),
+        "max_sg": float(max_sg),
+        "max_dataset": float(max_total),
+        "min_sg": float(min_sg),
+        "min_dataset": float(min_total),
+        "mean_lift": float(mean_sg - mean_total),
+        "median_lift": float(median_sg - median_total),
+        "coverage": float(coverage),
+        "precision": float(precision),
+        "recall": float(recall),
+        "f1_score": float(f1),
+    }
 
 
 def compute_jaccard_matrix(index_sets):
@@ -200,19 +222,3 @@ def summarize_jaccard_matrix(jaccard_df):
     mask = ~np.eye(n, dtype=bool)  # exclude diagonal
     vals = jaccard_df.values[mask]
     return {"mean": vals.mean(), "std": vals.std(), "min": vals.min()}
-
-
-def get_jaccard_df_summary(topk):
-
-    sgs_index_sets = {
-        idx: set(np.where(item["subgroup"])[0].tolist())
-        for idx, item in enumerate(topk)
-    }
-
-    jaccard_df = pd.DataFrame(
-        compute_jaccard_matrix(sgs_index_sets),
-        index=range(len(sgs_index_sets)),
-        columns=range(len(sgs_index_sets)),
-    )
-
-    return jaccard_df, summarize_jaccard_matrix(jaccard_df)

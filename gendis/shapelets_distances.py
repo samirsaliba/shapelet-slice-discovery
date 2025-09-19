@@ -34,7 +34,9 @@ def calculate_shapelet_dist_matrix(X, shapelets, cache=None, device="cuda"):
             d, l = cache_val
         else:
             # Calculate distances and positions for each row in X
-            d, l = sliding_window_dist(X, shap_torch, shap_len)
+            d, l = sliding_window_dist(
+                X, shap_torch, shap_len, norm="l2", offset_align=True
+            )
 
             if cache is not None:
                 cache.set(shap.id, (d.cpu(), l.cpu()))
@@ -45,25 +47,38 @@ def calculate_shapelet_dist_matrix(X, shapelets, cache=None, device="cuda"):
     return D.cpu().numpy(), L.cpu().numpy()
 
 
-def sliding_window_dist(X, shap, shap_len):
+def sliding_window_dist(X, shap, shap_len, norm="l1", offset_align=True):
     """
-    Calculate the minimum distance between a shapelet and each time series in X using sliding windows.
+    Compute sliding window distances between time series and shapelet.
 
     Parameters:
-    X (torch.Tensor): Time series data (2D tensor where rows are instances and columns are time steps)
-    shap (torch.Tensor): Shapelet tensor
+    X (torch.Tensor): (N, T) time series data
+    shap (torch.Tensor): (L,) shapelet
     shap_len (int): Length of the shapelet
+    norm (str): "l1" or "l2"
+    offset_align (bool): If True, offset shapelet to align with window's first point
 
     Returns:
-    torch.Tensor, torch.Tensor: Minimum distances and positions for each time series instance
+    torch.Tensor: Min distances, torch.Tensor: matching start positions
     """
-    # Unfold X to get all sliding windows of the shapelet's length
-    windows = X.unfold(1, shap_len, step=1)  # Shape: (N, num_windows, shap_len)
+    windows = X.unfold(1, shap_len, step=1)  # (N, num_windows, L)
 
-    # Calculate the Euclidean distance between each sliding window and the shapelet
-    distances = torch.norm(windows - shap, dim=2)  # Broadcasting to calculate distances
+    if offset_align:
+        # Compute offset to align shapelet start to window start
+        delta = windows[:, :, 0] - shap[0]  # (N, num_windows)
+        delta = delta.unsqueeze(-1)  # (N, num_windows, 1)
+        aligned_shap = (
+            shap.unsqueeze(0).unsqueeze(0) + delta
+        )  # (1, 1, L) + (N, num_windows, 1)
+        diffs = windows - aligned_shap
+    else:
+        diffs = windows - shap  # broadcasting works without offset
 
-    # Find the minimum distance and its index for each row in X
-    min_distances, min_positions = distances.min(dim=1)
+    if norm == "l1":
+        distances = torch.sum(torch.abs(diffs), dim=2)
+    elif norm == "l2":
+        distances = torch.norm(diffs, dim=2)
+    else:
+        raise ValueError(f"Unsupported norm '{norm}'. Use 'l1' or 'l2'.")
 
-    return min_distances, min_positions
+    return distances.min(dim=1)
